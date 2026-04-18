@@ -46,7 +46,7 @@ def login():
 # =========================
 @app.route("/dashboard")
 def dashboard():
-    if not is_logged_in():
+    if not session.get("auth"):
         return redirect(url_for("login"))
 
     return render_template("index.html")
