@@ -3,6 +3,7 @@
 <head>
     <title>Fano's Tools</title>
 </head>
+
 <body style="font-family: Arial; background:#111; color:white; text-align:center;">
 
 <div id="auth">
@@ -14,7 +15,7 @@
     <button onclick="login()">Login</button>
     <button onclick="register()">Register</button>
 
-    <p id="auth-msg"></p>
+    <p id="authMsg"></p>
 </div>
 
 <div id="app" style="display:none;">
@@ -55,42 +56,60 @@ function showApp() {
     loadLogs();
 }
 
-function login() {
-    fetch("/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
+function showAuth() {
+    document.getElementById("auth").style.display = "block";
+    document.getElementById("app").style.display = "none";
+}
+
+async function login() {
+    let res = await fetch("/login", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        credentials: "include",
+        body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value
         })
-    }).then(r=>r.json()).then(d=>{
-        if(d.success) showApp();
-        else auth-msg.innerText="Login failed";
     });
+
+    let data = await res.json();
+
+    if (data.success) {
+        showApp();
+    } else {
+        document.getElementById("authMsg").innerText = "Login failed";
+    }
 }
 
-function register() {
-    fetch("/register", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
+async function register() {
+    let res = await fetch("/register", {
+        method: "POST",
+        headers: {"Content-Type":"application/json"},
+        credentials: "include",
+        body: JSON.stringify({
+            username: document.getElementById("username").value,
+            password: document.getElementById("password").value
         })
-    }).then(r=>r.json()).then(d=>{
-        if(d.success) auth-msg.innerText="Registered! Now login.";
-        else auth-msg.innerText="User exists";
     });
+
+    let data = await res.json();
+
+    if (data.success) {
+        document.getElementById("authMsg").innerText = "Registered! Now login.";
+    } else {
+        document.getElementById("authMsg").innerText = "User exists";
+    }
 }
 
-function logout(){
-    window.location="/logout";
+function logout() {
+    window.location = "/logout";
 }
 
-function creditNow(){
-    fetch("/credit-now",{
+async function creditNow(){
+    await fetch("/credit-now",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
+        credentials:"include",
         body:JSON.stringify({
             app_token:app_token.value,
             event_token:event_token.value,
@@ -98,18 +117,21 @@ function creditNow(){
             is_ios:ios.checked,
             use_s2s:s2s.checked
         })
-    }).then(()=>loadLogs());
+    });
+
+    loadLogs();
 }
 
-function schedule(){
+async function schedule(){
     let seconds =
         (parseInt(h.value)||0)*3600 +
         (parseInt(m.value)||0)*60 +
         (parseInt(s.value)||0);
 
-    fetch("/schedule",{
+    await fetch("/schedule",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
+        credentials:"include",
         body:JSON.stringify({
             app_token:app_token.value,
             event_token:event_token.value,
@@ -118,58 +140,88 @@ function schedule(){
             use_s2s:s2s.checked,
             seconds:seconds
         })
-    }).then(()=>loadJobs());
+    });
+
+    loadJobs();
 }
 
-function loadJobs(){
-    fetch("/jobs").then(r=>r.json()).then(d=>{
-        jobs.innerHTML="";
+async function loadJobs(){
+    let res = await fetch("/jobs",{credentials:"include"});
+    if(res.status !== 200) return showAuth();
 
-        d.forEach(j=>{
-            let div=document.createElement("div");
+    let data = await res.json();
 
-            function update(){
-                let left=Math.floor(j.run_at-Date.now()/1000);
-                if(left<=0){
-                    div.innerHTML="Running...";
-                }else{
-                    div.innerHTML=
-                        left+"s "+
-                        `<button onclick="cancel('${j.id}')">Cancel</button>`;
-                }
+    let jobsDiv = document.getElementById("jobs");
+    jobsDiv.innerHTML = "";
+
+    data.forEach(j=>{
+        let div = document.createElement("div");
+
+        function update(){
+            let left = Math.floor(j.run_at - Date.now()/1000);
+
+            if(left <= 0){
+                div.innerHTML = "Running...";
+            } else {
+                div.innerHTML =
+                    left + "s " +
+                    `<button onclick="cancelJob('${j.id}')">Cancel</button>`;
             }
+        }
 
-            setInterval(update,1000);
-            update();
+        setInterval(update,1000);
+        update();
 
-            jobs.appendChild(div);
-        });
+        jobsDiv.appendChild(div);
     });
 }
 
-function cancel(id){
-    fetch("/cancel",{
+async function cancelJob(id){
+    await fetch("/cancel",{
         method:"POST",
         headers:{"Content-Type":"application/json"},
+        credentials:"include",
         body:JSON.stringify({id})
-    }).then(()=>loadJobs());
+    });
+
+    loadJobs();
 }
 
-function loadLogs(){
-    fetch("/logs").then(r=>r.json()).then(d=>{
-        logs.innerHTML="";
-        d.forEach(l=>{
-            logs.innerHTML+=`[${l.time}] ${l.msg}<br>`;
-        });
+async function loadLogs(){
+    let res = await fetch("/logs",{credentials:"include"});
+    if(res.status !== 200) return;
+
+    let data = await res.json();
+
+    let logsDiv = document.getElementById("logs");
+    logsDiv.innerHTML = "";
+
+    data.forEach(l=>{
+        logsDiv.innerHTML += `[${l.time}] ${l.msg}<br>`;
     });
 }
 
-function clearLogs(){
-    fetch("/clear-logs",{method:"POST"}).then(()=>loadLogs());
+async function clearLogs(){
+    await fetch("/clear-logs",{method:"POST", credentials:"include"});
+    loadLogs();
 }
 
-setInterval(loadJobs,5000);
-setInterval(loadLogs,5000);
+/* 🔥 AUTO LOGIN CHECK */
+async function checkSession(){
+    let res = await fetch("/jobs",{credentials:"include"});
+    if(res.status === 200){
+        showApp();
+    } else {
+        showAuth();
+    }
+}
+
+checkSession();
+
+/* AUTO REFRESH */
+setInterval(loadJobs, 5000);
+setInterval(loadLogs, 5000);
+
 </script>
 
 </body>
