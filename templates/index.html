@@ -2,15 +2,68 @@
 <html>
 <head>
     <title>Fano's Tools</title>
+
+    <style>
+        body {
+            margin:0;
+            font-family: Arial;
+            background: #0b1a2b;
+            color: white;
+            text-align:center;
+        }
+
+        .box {
+            background:#112b45;
+            padding:20px;
+            border-radius:10px;
+            width:300px;
+            margin:20px auto;
+        }
+
+        input {
+            width:90%;
+            padding:10px;
+            margin:5px;
+            border:none;
+            border-radius:5px;
+        }
+
+        button {
+            padding:10px 15px;
+            margin:5px;
+            border:none;
+            border-radius:5px;
+            background:#1e90ff;
+            color:white;
+            cursor:pointer;
+        }
+
+        button:hover {
+            background:#3aa0ff;
+        }
+
+        #jobs div {
+            background:#0e2238;
+            padding:10px;
+            margin:5px;
+            border-radius:5px;
+        }
+
+        #logs {
+            max-height:200px;
+            overflow:auto;
+            text-align:left;
+        }
+    </style>
 </head>
 
-<body style="font-family: Arial; background:#111; color:white; text-align:center;">
+<body>
 
-<div id="auth">
-    <h1>Fano's Tools</h1>
+<div id="auth" class="box">
+    <h2>Fano's Tools</h2>
 
-    <input id="username" placeholder="Username"><br><br>
-    <input id="password" type="password" placeholder="Password"><br><br>
+    <input id="username" placeholder="Username">
+    <input id="password" type="password" placeholder="Password">
 
     <button onclick="login()">Login</button>
     <button onclick="register()">Register</button>
@@ -19,91 +72,113 @@
 </div>
 
 <div id="app" style="display:none;">
-    <h1>Fano's Tools</h1>
 
-    <button onclick="logout()">Logout</button>
+    <div class="box">
+        <h2>Fano's Tools</h2>
+        <button onclick="logout()">Logout</button>
+    </div>
 
-    <h3>Instant Credit</h3>
-    <input id="app_token" placeholder="App Token"><br>
-    <input id="event_token" placeholder="Event Token"><br>
-    <input id="device_id" placeholder="Device ID"><br><br>
+    <div class="box">
+        <h3>Instant Credit</h3>
 
-    <label><input type="checkbox" id="ios"> iOS</label>
-    <label><input type="checkbox" id="s2s"> S2S</label><br><br>
+        <input id="app_token" placeholder="App Token">
+        <input id="event_token" placeholder="Event Token">
+        <input id="device_id" placeholder="Device ID">
 
-    <button onclick="creditNow()">Credit Now</button>
+        <br>
 
-    <h3>Schedule</h3>
-    <input id="h" placeholder="Hours" type="number">
-    <input id="m" placeholder="Minutes" type="number">
-    <input id="s" placeholder="Seconds" type="number"><br><br>
+        <label><input type="checkbox" id="ios"> iOS</label>
+        <label><input type="checkbox" id="s2s"> S2S</label>
 
-    <button onclick="schedule()">Start Job</button>
+        <br><br>
 
-    <h3>Jobs</h3>
-    <div id="jobs"></div>
+        <button onclick="creditNow()">Credit Now</button>
+    </div>
 
-    <h3>Logs</h3>
-    <button onclick="clearLogs()">Clear Logs</button>
-    <div id="logs"></div>
+    <div class="box">
+        <h3>Scheduler</h3>
+
+        <input id="h" type="number" placeholder="Hours">
+        <input id="m" type="number" placeholder="Minutes">
+        <input id="s" type="number" placeholder="Seconds">
+
+        <br><br>
+
+        <button onclick="schedule()">Start Job</button>
+    </div>
+
+    <div class="box">
+        <h3>Jobs</h3>
+        <div id="jobs"></div>
+    </div>
+
+    <div class="box">
+        <h3>Logs</h3>
+        <button onclick="clearLogs()">Clear Logs</button>
+        <div id="logs"></div>
+    </div>
+
 </div>
 
 <script>
-function showApp() {
-    document.getElementById("auth").style.display = "none";
-    document.getElementById("app").style.display = "block";
+function showApp(){
+    document.getElementById("auth").style.display="none";
+    document.getElementById("app").style.display="block";
     loadJobs();
     loadLogs();
 }
 
-function showAuth() {
-    document.getElementById("auth").style.display = "block";
-    document.getElementById("app").style.display = "none";
+function showAuth(){
+    document.getElementById("auth").style.display="block";
+    document.getElementById("app").style.display="none";
 }
 
-async function login() {
-    let res = await fetch("/login", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        credentials: "include",
-        body: JSON.stringify({
-            username: document.getElementById("username").value,
-            password: document.getElementById("password").value
+/* 🔥 FIXED LOGIN */
+async function login(){
+    let res = await fetch("/login",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        credentials:"include",
+        body:JSON.stringify({
+            username:username.value,
+            password:password.value
         })
     });
 
-    let data = await res.json();
+    let d = await res.json();
 
-    if (data.success) {
+    if(d.success){
         showApp();
-    } else {
-        document.getElementById("authMsg").innerText = "Login failed";
+    }else{
+        authMsg.innerText="Login failed";
     }
 }
 
-async function register() {
-    let res = await fetch("/register", {
-        method: "POST",
-        headers: {"Content-Type":"application/json"},
-        credentials: "include",
-        body: JSON.stringify({
-            username: document.getElementById("username").value,
-            password: document.getElementById("password").value
+async function register(){
+    let res = await fetch("/register",{
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        credentials:"include",
+        body:JSON.stringify({
+            username:username.value,
+            password:password.value
         })
     });
 
-    let data = await res.json();
+    let d = await res.json();
 
-    if (data.success) {
-        document.getElementById("authMsg").innerText = "Registered! Now login.";
-    } else {
-        document.getElementById("authMsg").innerText = "User exists";
+    if(d.success){
+        authMsg.innerText="Registered! Login now.";
+    }else{
+        authMsg.innerText="User exists";
     }
 }
 
-function logout() {
-    window.location = "/logout";
+function logout(){
+    window.location="/logout";
 }
+
+/* -------- CORE -------- */
 
 async function creditNow(){
     await fetch("/credit-now",{
@@ -147,32 +222,30 @@ async function schedule(){
 
 async function loadJobs(){
     let res = await fetch("/jobs",{credentials:"include"});
-    if(res.status !== 200) return showAuth();
+    if(res.status!==200) return showAuth();
 
     let data = await res.json();
 
-    let jobsDiv = document.getElementById("jobs");
-    jobsDiv.innerHTML = "";
+    jobs.innerHTML="";
 
     data.forEach(j=>{
-        let div = document.createElement("div");
+        let div=document.createElement("div");
 
         function update(){
-            let left = Math.floor(j.run_at - Date.now()/1000);
+            let left=Math.floor(j.run_at-Date.now()/1000);
 
-            if(left <= 0){
-                div.innerHTML = "Running...";
-            } else {
-                div.innerHTML =
-                    left + "s " +
-                    `<button onclick="cancelJob('${j.id}')">Cancel</button>`;
+            if(left<=0){
+                div.innerHTML="Running...";
+            }else{
+                div.innerHTML=left+"s "+
+                `<button onclick="cancelJob('${j.id}')">Cancel</button>`;
             }
         }
 
         setInterval(update,1000);
         update();
 
-        jobsDiv.appendChild(div);
+        jobs.appendChild(div);
     });
 }
 
@@ -188,39 +261,37 @@ async function cancelJob(id){
 }
 
 async function loadLogs(){
-    let res = await fetch("/logs",{credentials:"include"});
-    if(res.status !== 200) return;
+    let res=await fetch("/logs",{credentials:"include"});
+    if(res.status!==200) return;
 
-    let data = await res.json();
+    let data=await res.json();
 
-    let logsDiv = document.getElementById("logs");
-    logsDiv.innerHTML = "";
-
+    logs.innerHTML="";
     data.forEach(l=>{
-        logsDiv.innerHTML += `[${l.time}] ${l.msg}<br>`;
+        logs.innerHTML+=`[${l.time}] ${l.msg}<br>`;
     });
 }
 
 async function clearLogs(){
-    await fetch("/clear-logs",{method:"POST", credentials:"include"});
+    await fetch("/clear-logs",{method:"POST",credentials:"include"});
     loadLogs();
 }
 
-/* 🔥 AUTO LOGIN CHECK */
+/* 🔥 AUTO LOGIN CHECK (THIS FIXES YOUR ISSUE) */
 async function checkSession(){
     let res = await fetch("/jobs",{credentials:"include"});
-    if(res.status === 200){
+    if(res.status===200){
         showApp();
-    } else {
+    }else{
         showAuth();
     }
 }
 
 checkSession();
 
-/* AUTO REFRESH */
-setInterval(loadJobs, 5000);
-setInterval(loadLogs, 5000);
+/* refresh */
+setInterval(loadJobs,5000);
+setInterval(loadLogs,5000);
 
 </script>
 
