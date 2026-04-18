@@ -19,16 +19,9 @@ body {
     background:#111;
     padding:30px;
     width:320px;
-    border-radius:6px;
-    box-shadow:0 0 10px #000;
 }
 
-h2 {
-    margin:0 0 15px 0;
-    text-align:center;
-}
-
-input {
+input, button {
     width:100%;
     padding:10px;
     margin-top:10px;
@@ -37,25 +30,12 @@ input {
     color:#fff;
 }
 
-button {
-    width:100%;
-    padding:10px;
-    margin-top:15px;
-    background:#26264a;
-    border:none;
-    color:#fff;
-    cursor:pointer;
-}
-
-button:hover {
-    background:#33336b;
-}
+button { cursor:pointer; }
 
 .error {
-    color:#ff4d4d;
+    color:red;
     margin-top:10px;
     text-align:center;
-    font-size:14px;
 }
 </style>
 
@@ -63,9 +43,10 @@ button:hover {
 <body>
 
 <div class="box">
-    <h2>🔒 Enter Password</h2>
+    <h2>Enter Password</h2>
 
-    <form method="POST">
+    <!-- 🔥 IMPORTANT: action="/" FIX -->
+    <form method="POST" action="/">
         <input type="password" name="password" placeholder="Password" required>
         <button type="submit">Enter</button>
     </form>
