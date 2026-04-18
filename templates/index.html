@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Fano's Tools</title>
+
+<style>
+body {
+    background:#0d0d1a;
+    color:#c0bedd;
+    font-family:Courier;
+    padding:20px;
+}
+
+input,button {
+    width:100%;
+    padding:8px;
+    margin:5px 0;
+    background:#1a1a2e;
+    border:none;
+    color:#fff;
+}
+
+button { cursor:pointer; }
+
+.job {
+    background:#111;
+    padding:8px;
+    margin:5px 0;
+}
+
+.log {
+    background:#000;
+    padding:10px;
+    margin-top:10px;
+    white-space:pre-wrap;
+    font-size:12px;
+    max-height:200px;
+    overflow:auto;
+}
+
+.topbar {
+    margin-bottom:15px;
+}
+</style>
+</head>
+
+<body>
+
+<div class="topbar">
+    <h2>Fano's Tools</h2>
+    <p>Logged in as: {{ user }} | <a href="/logout">Logout</a></p>
+</div>
+
+<input id="app_token" placeholder="App Token">
+<input id="event_token" placeholder="Event Token">
+<input id="device_id" placeholder="Device ID">
+
+<label><input type="checkbox" id="ios" checked> iOS</label>
+<label><input type="checkbox" id="s2s"> s2s</label>
+
+<button onclick="creditNow()">🔥 Credit Now</button>
+
+<h3>Schedule</h3>
+
+<input id="hours" placeholder="Hours">
+<input id="minutes" placeholder="Minutes">
+<input id="seconds" placeholder="Seconds">
+
+<button onclick="schedule()">Schedule</button>
+
+<h3>Jobs</h3>
+<div id="jobs"></div>
+
+<h3>Logs</h3>
+<div id="logs" class="log"></div>
+
+<script>
+function getData() {
+    return {
+        app_token: app_token.value,
+        event_token: event_token.value,
+        device_id: device_id.value,
+        is_ios: ios.checked,
+        use_s2s: s2s.checked
+    }
+}
+
+function addLog(data) {
+    const logBox = document.getElementById("logs");
+    logBox.textContent =
+        JSON.stringify(data, null, 2) + "\n\n" + logBox.textContent;
+}
+
+async function creditNow() {
+    const res = await fetch("/credit-now", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(getData())
+    });
+
+    const data = await res.json();
+
+    console.log(data);
+    addLog(data);
+}
+
+async function schedule() {
+    await fetch("/schedule", {
+        method:"POST",
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+            ...getData(),
+            hours: hours.value || 0,
+            minutes: minutes.value || 0,
+            seconds: seconds.value || 0
+        })
+    });
+}
+
+async function cancelJob(id) {
+    await fetch("/cancel/" + id, { method:"POST" });
+}
+
+function format(sec) {
+    let h = Math.floor(sec/3600);
+    let m = Math.floor((sec%3600)/60);
+    let s = sec%60;
+    return `${h}h ${m}m ${s}s`;
+}
+
+let shownResults = new Set();
+
+async function loadJobs() {
+    const res = await fetch("/jobs");
+    const jobs = await res.json();
+
+    const container = document.getElementById("jobs");
+    container.innerHTML = "";
+
+    jobs.forEach(j => {
+        container.innerHTML += `
+            <div class="job">
+                Job #${j.id} - ${
+                    j.done
+                    ? "Completed"
+                    : format(j.remaining)
+                }
+                ${
+                    !j.done
+                    ? `<button onclick="cancelJob(${j.id})">Cancel</button>`
+                    : ""
+                }
+            </div>
+        `;
+
+        if (j.done && j.result && !shownResults.has(j.id)) {
+            addLog(j.result);
+            shownResults.add(j.id);
+        }
+    });
+}
+
+setInterval(loadJobs, 1000);
+</script>
+
+</body>
+</html>
