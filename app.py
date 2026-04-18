@@ -114,7 +114,10 @@ def worker():
         time.sleep(1)
 
 
-threading.Thread(target=worker, daemon=True).start()
+# 🔥 IMPORTANT FIX (prevents multiple workers on Render)
+if not hasattr(app, "worker_started"):
+    threading.Thread(target=worker, daemon=True).start()
+    app.worker_started = True
 
 
 # ---------------- AUTH ----------------
@@ -212,6 +215,9 @@ def schedule():
 @app.route("/jobs")
 def jobs():
     user = session.get("user")
+    if not user:
+        return jsonify(error="not logged in"), 401  # 🔥 FIX
+
     conn = db()
     c = conn.cursor()
 
@@ -224,6 +230,9 @@ def jobs():
 @app.route("/cancel", methods=["POST"])
 def cancel():
     user = session.get("user")
+    if not user:
+        return jsonify(error="not logged in"), 401
+
     job_id = request.json["id"]
 
     conn = db()
@@ -238,6 +247,8 @@ def cancel():
 @app.route("/logs")
 def logs():
     user = session.get("user")
+    if not user:
+        return jsonify(error="not logged in"), 401
 
     conn = db()
     c = conn.cursor()
@@ -251,6 +262,8 @@ def logs():
 @app.route("/clear-logs", methods=["POST"])
 def clear_logs():
     user = session.get("user")
+    if not user:
+        return jsonify(error="not logged in"), 401
 
     conn = db()
     c = conn.cursor()
