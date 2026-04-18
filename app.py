@@ -29,6 +29,8 @@ def init_db():
         app_token TEXT,
         event_token TEXT,
         device_id TEXT,
+        is_ios INTEGER,
+        use_s2s INTEGER,
         run_at REAL,
         status TEXT
     )""")
@@ -53,23 +55,38 @@ def add_log(user_id, msg):
     conn.commit()
     conn.close()
 
-# ---------------- SEND EVENT ----------------
-def send_event(app_token, event_token, device_id):
+# ---------------- SEND EVENT (FIXED) ----------------
+def send_event(app_token, event_token, device_id, is_ios, use_s2s):
     url = "https://app.adjust.com/event"
 
     data = {
         "app_token": app_token,
         "event_token": event_token,
-        "environment": "production"
+        "environment": "production",
+        "currency": "USD",
+        "revenue": "4.99"
     }
 
-    data["gps_adid"] = device_id
+    # 🔥 THIS WAS THE PROBLEM — missing correct device handling
+    if is_ios:
+        data["idfa"] = device_id
+    else:
+        data["gps_adid"] = device_id
+        data["android_uuid"] = str(uuid.uuid4())
+        data["google_play_app_set_id"] = str(uuid.uuid4())
+
+    if use_s2s:
+        data["s2s"] = "1"
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
 
     try:
-        r = requests.post(url, data=data)
-
+        r = requests.post(url, data=data, headers=headers)
         txt = r.text
 
+        # 🔥 CLEAN LOG OUTPUT (LIKE DESKTOP)
         if "Invalid app token" in txt:
             return {"error": "Event request failed (Invalid app token)"}
 
@@ -77,10 +94,21 @@ def send_event(app_token, event_token, device_id):
             return {"error": "Event request failed (Invalid event token)"}
 
         if "Device not found" in txt:
-            return {"error": "Event request failed (Device not found)"}
+            return {
+                "app_token": app_token,
+                "adid": device_id,
+                "error": "Event request failed (Device not found)"
+            }
 
         if "tracked" in txt:
-            return {"error": "Event request failed (Ignoring event, earlier unique event tracked)"}
+            return {
+                "app_token": app_token,
+                "adid": device_id,
+                "error": "Event request failed (Ignoring event, earlier unique event tracked)"
+            }
+
+        if "unsupported sdk" in txt:
+            return {"error": "Event request failed (unsupported sdk)"}
 
         return {"success": txt}
 
@@ -99,9 +127,10 @@ def worker():
         jobs = c.fetchall()
 
         for job in jobs:
-            job_id, user_id, app_token, event_token, device_id, run_at, status = job
+            (job_id, user_id, app_token, event_token,
+             device_id, is_ios, use_s2s, run_at, status) = job
 
-            res = send_event(app_token, event_token, device_id)
+            res = send_event(app_token, event_token, device_id, is_ios, use_s2s)
 
             add_log(user_id, str(res))
 
@@ -133,16 +162,14 @@ def register():
 @app.route("/login", methods=["POST"])
 def login():
     data = request.json
-    username = data["username"]
-    password = data["password"]
 
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
-    c.execute("SELECT id, password FROM users WHERE username=?", (username,))
+    c.execute("SELECT id, password FROM users WHERE username=?", (data["username"],))
     user = c.fetchone()
 
-    if user and check_password_hash(user[1], password):
+    if user and check_password_hash(user[1], data["password"]):
         session["user_id"] = user[0]
         return jsonify({"success": True})
 
@@ -169,9 +196,13 @@ def schedule():
     conn = sqlite3.connect(DB)
     c = conn.cursor()
 
-    c.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
-              (job_id, session["user_id"], data["app_token"],
-               data["event_token"], data["device_id"], run_at, "pending"))
+    c.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+              (job_id, session["user_id"],
+               data["app_token"], data["event_token"],
+               data["device_id"],
+               int(data.get("ios", False)),
+               int(data.get("s2s", False)),
+               run_at, "pending"))
 
     conn.commit()
     conn.close()
@@ -185,7 +216,14 @@ def credit_now():
 
     data = request.json
 
-    res = send_event(data["app_token"], data["event_token"], data["device_id"])
+    res = send_event(
+        data["app_token"],
+        data["event_token"],
+        data["device_id"],
+        data.get("ios", False),
+        data.get("s2s", False)
+    )
+
     add_log(session["user_id"], str(res))
 
     return jsonify(res)
@@ -202,7 +240,6 @@ def jobs():
     rows = c.fetchall()
 
     conn.close()
-
     return jsonify(rows)
 
 @app.route("/cancel", methods=["POST"])
@@ -231,7 +268,6 @@ def logs():
     rows = c.fetchall()
 
     conn.close()
-
     return jsonify(rows)
 
 # ---------------- UI ----------------
