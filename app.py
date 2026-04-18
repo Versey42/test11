@@ -1,93 +1,30 @@
 import uuid
-import threading
-import time
-from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, session, redirect, url_for
+from flask import Flask, request, jsonify, render_template, redirect, url_for, session
 import requests
+from datetime import datetime
 
 app = Flask(__name__)
-
-# ✅ REQUIRED for sessions (fixes 500 error)
-app.config["SECRET_KEY"] = "change-this-secret-key"
+app.secret_key = "super-secret-key-change-this"
 
 PASSWORD = "FanoDaddy"
 
-jobs = {}
-job_id_counter = 0
-lock = threading.Lock()
-
-
+# =========================
+# AUTH HELPER
+# =========================
 def is_logged_in():
     return session.get("auth") == True
 
 
-def send_single(app_token, event_token, device_id, is_ios, use_s2s):
-    try:
-        url = "https://app.adjust.com/event"
-
-        headers = {
-            "accept-encoding": "gzip",
-            "client-sdk": "android4.36.0",
-            "content-type": "application/x-www-form-urlencoded"
-        }
-
-        data = {
-            "app_token": app_token,
-            "event_token": event_token,
-            "environment": "production"
-        }
-
-        if is_ios:
-            data["idfa"] = device_id
-        else:
-            data["gps_adid"] = device_id
-            data["android_uuid"] = str(uuid.uuid4())
-
-        if use_s2s:
-            data["s2s"] = "1"
-
-        r = requests.post(url, data=data, headers=headers, timeout=10)
-
-        try:
-            return r.json()
-        except:
-            return {"raw": r.text, "status": r.status_code}
-
-    except Exception as e:
-        return {"error": str(e)}
-
-
-def run_job(jid):
-    job = jobs[jid]
-
-    while True:
-        if job["cancelled"]:
-            return
-
-        if datetime.now() >= job["target"]:
-            break
-
-        time.sleep(1)
-
-    if job["cancelled"]:
-        return
-
-    result = send_single(
-        job["app_token"],
-        job["event_token"],
-        job["device_id"],
-        job["is_ios"],
-        job["use_s2s"]
-    )
-
-    job["done"] = True
-    job["result"] = result
-
-
-# ✅ LOGIN PAGE
+# =========================
+# LOGIN PAGE
+# =========================
 @app.route("/", methods=["GET", "POST"])
 def login():
     try:
+        # ✅ prevent double login loop
+        if is_logged_in():
+            return redirect(url_for("dashboard"))
+
         if request.method == "POST":
             if request.form.get("password") == PASSWORD:
                 session["auth"] = True
@@ -101,107 +38,204 @@ def login():
         return f"Login error: {str(e)}"
 
 
-# ✅ DASHBOARD
+# =========================
+# DASHBOARD
+# =========================
 @app.route("/dashboard")
 def dashboard():
     if not is_logged_in():
         return redirect(url_for("login"))
+
     return render_template("index.html")
 
 
-@app.route("/credit-now", methods=["POST"])
-def credit_now():
-    if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
+# =========================
+# SEND EVENT FUNCTION
+# =========================
+def send_single(app_token, event_token, device_id, is_ios, use_s2s):
+    url = "https://app.adjust.com/event"
 
-    data = request.get_json(force=True)
+    data = {
+        "app_token": app_token,
+        "event_token": event_token,
+        "environment": "production",
+        "currency": "USD",
+        "revenue": "4.99"
+    }
+
+    if is_ios:
+        data["idfa"] = device_id
+    else:
+        data["gps_adid"] = device_id
+        data["android_uuid"] = str(uuid.uuid4())
+        data["google_app_set_id"] = str(uuid.uuid4())
+
+    if use_s2s:
+        data["s2s"] = "1"
+
+    headers = {
+        "Content-Type": "application/x-www-form-urlencoded"
+    }
+
+    response = requests.post(url, data=data, headers=headers)
+
+    text = response.text.lower()
+
+    # ✅ CUSTOM ERROR HANDLING (like your old script)
+    if "invalid app token" in text:
+        return {"error": "Event request failed (Invalid app token)"}
+
+    if "invalid event token" in text:
+        return {"error": "Event request failed (Invalid event token)"}
+
+    if "device" in text and "not found" in text:
+        return {
+            "app_token": app_token,
+            "adid": device_id,
+            "error": "Event request failed (Device not found)"
+        }
+
+    if "already" in text or "duplicate" in text:
+        return {
+            "app_token": app_token,
+            "adid": device_id,
+            "error": "Event request failed (Ignoring event, earlier unique event tracked)"
+        }
+
+    return {
+        "status": response.status_code,
+        "response": response.text
+    }
+
+
+# =========================
+# SEND NOW
+# =========================
+@app.route("/send-now", methods=["POST"])
+def send_now():
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.json
 
     result = send_single(
-        data["app_token"],
-        data["event_token"],
-        data["device_id"],
-        data["is_ios"],
-        data["use_s2s"]
+        data.get("app_token"),
+        data.get("event_token"),
+        data.get("device_id"),
+        data.get("is_ios"),
+        data.get("use_s2s")
     )
 
     return jsonify(result)
 
 
+# =========================
+# CREDIT NOW (FIXED)
+# =========================
+@app.route("/credit-now", methods=["POST"])
+def credit_now():
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.json
+
+    result = send_single(
+        data.get("app_token"),
+        data.get("event_token"),
+        data.get("device_id"),
+        data.get("is_ios"),
+        data.get("use_s2s")
+    )
+
+    return jsonify(result)
+
+
+# =========================
+# JOB STORAGE (IN MEMORY)
+# =========================
+jobs = {}
+
+
+# =========================
+# SCHEDULE JOB
+# =========================
 @app.route("/schedule", methods=["POST"])
 def schedule():
     if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
+        return jsonify({"error": "unauthorized"}), 401
 
-    global job_id_counter
-    data = request.get_json(force=True)
+    data = request.json
 
-    seconds = (
-        int(data.get("hours", 0)) * 3600 +
-        int(data.get("minutes", 0)) * 60 +
-        int(data.get("seconds", 0))
-    )
+    job_id = str(uuid.uuid4())
 
-    target = datetime.now() + timedelta(seconds=seconds)
+    run_at = datetime.utcnow().timestamp() + int(data.get("delay", 0))
 
-    with lock:
-        job_id_counter += 1
-        jid = job_id_counter
+    jobs[job_id] = {
+        "id": job_id,
+        "data": data,
+        "run_at": run_at
+    }
 
-        jobs[jid] = {
-            "id": jid,
-            "target": target,
-            "app_token": data["app_token"],
-            "event_token": data["event_token"],
-            "device_id": data["device_id"],
-            "is_ios": data["is_ios"],
-            "use_s2s": data["use_s2s"],
-            "cancelled": False,
-            "done": False,
-            "result": None
-        }
-
-    threading.Thread(target=run_job, args=(jid,), daemon=True).start()
-
-    return jsonify({"ok": True})
+    return jsonify({"success": True, "job_id": job_id})
 
 
+# =========================
+# GET JOBS
+# =========================
 @app.route("/jobs")
 def get_jobs():
     if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
+        return jsonify({"error": "unauthorized"}), 401
 
-    output = []
-
-    for jid, j in list(jobs.items()):
-        if j["cancelled"]:
-            del jobs[jid]
-            continue
-
-        remaining = int((j["target"] - datetime.now()).total_seconds())
-        if remaining < 0:
-            remaining = 0
-
-        output.append({
-            "id": j["id"],
-            "remaining": remaining,
-            "done": j["done"],
-            "result": j["result"]
-        })
-
-    return jsonify(output)
+    return jsonify(list(jobs.values()))
 
 
-@app.route("/cancel/<int:jid>", methods=["POST"])
-def cancel(jid):
+# =========================
+# CANCEL JOB
+# =========================
+@app.route("/cancel/<job_id>", methods=["POST"])
+def cancel(job_id):
     if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
+        return jsonify({"error": "unauthorized"}), 401
 
-    if jid in jobs:
-        jobs[jid]["cancelled"] = True
-        return jsonify({"ok": True})
+    if job_id in jobs:
+        del jobs[job_id]
 
-    return jsonify({"error": "not found"}), 404
+    return jsonify({"success": True})
 
 
+# =========================
+# BACKGROUND LOOP
+# =========================
+import threading
+import time
+
+def job_runner():
+    while True:
+        now = datetime.utcnow().timestamp()
+
+        for job_id in list(jobs.keys()):
+            job = jobs[job_id]
+
+            if now >= job["run_at"]:
+                send_single(
+                    job["data"].get("app_token"),
+                    job["data"].get("event_token"),
+                    job["data"].get("device_id"),
+                    job["data"].get("is_ios"),
+                    job["data"].get("use_s2s")
+                )
+
+                del jobs[job_id]
+
+        time.sleep(1)
+
+
+threading.Thread(target=job_runner, daemon=True).start()
+
+
+# =========================
+# RUN
+# =========================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(debug=True)
