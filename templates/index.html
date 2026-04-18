@@ -1,146 +1,145 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Fano's Tools</title>
-    <style>
-        body { background:#0b0b1a; color:#ccc; font-family: monospace; }
-        input, button { width:100%; margin:5px 0; padding:10px; background:#1a1a2e; color:white; border:none; }
-        button { cursor:pointer; }
-    </style>
+<title>S2S Manual</title>
+<style>
+body {
+    background:#0d0d1a;
+    color:#c0bedd;
+    font-family:Courier;
+    padding:20px;
+}
+
+input,button {
+    width:100%;
+    padding:8px;
+    margin:5px 0;
+    background:#1a1a2e;
+    border:none;
+    color:#fff;
+}
+
+button { cursor:pointer; }
+
+.job {
+    background:#111;
+    padding:8px;
+    margin:5px 0;
+}
+
+.log {
+    background:#000;
+    padding:10px;
+    margin-top:10px;
+    white-space:pre-wrap;
+    font-size:12px;
+    max-height:200px;
+    overflow:auto;
+}
+</style>
 </head>
 <body>
 
-<h1>Fano's Tools</h1>
+<h2>S2S Manual</h2>
 
-<div id="auth">
-    <input id="username" placeholder="Username">
-    <input id="password" type="password" placeholder="Password">
-    <button onclick="register()">Register</button>
-    <button onclick="login()">Login</button>
-</div>
+<input id="app_token" placeholder="App Token">
+<input id="event_token" placeholder="Event Token">
+<input id="device_id" placeholder="Device ID">
 
-<div id="app" style="display:none;">
-    <p>Logged in | <a href="#" onclick="logout()">Logout</a></p>
+<label><input type="checkbox" id="ios" checked> iOS</label>
+<label><input type="checkbox" id="s2s"> s2s</label>
 
-    <input id="app_token" placeholder="App Token">
-    <input id="event_token" placeholder="Event Token">
-    <input id="device_id" placeholder="Device ID">
+<button onclick="creditNow()">🔥 Credit Now</button>
 
-    <label><input type="checkbox" id="ios"> iOS</label>
-    <label><input type="checkbox" id="s2s"> s2s</label>
+<h3>Schedule</h3>
 
-    <button onclick="creditNow()">🔥 Credit Now</button>
+<input id="hours" placeholder="Hours">
+<input id="minutes" placeholder="Minutes">
+<input id="seconds" placeholder="Seconds">
 
-    <h3>Schedule</h3>
-    <input id="hours" placeholder="Hours">
-    <input id="minutes" placeholder="Minutes">
-    <input id="seconds" placeholder="Seconds">
-    <button onclick="schedule()">Schedule</button>
+<button onclick="schedule()">Schedule</button>
 
-    <h3>Jobs</h3>
-    <div id="jobs"></div>
+<h3>Jobs</h3>
+<div id="jobs"></div>
 
-    <h3>Logs</h3>
-    <div id="logs"></div>
-</div>
+<h3>Logs</h3>
+<div id="logs" class="log"></div>
 
 <script>
-const jobsDiv = document.getElementById("jobs");
-const logsDiv = document.getElementById("logs");
-
-async function register(){
-    await fetch("/register", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({username:username.value,password:password.value})
-    });
-    alert("Registered");
-}
-
-async function login(){
-    let res = await fetch("/login", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({username:username.value,password:password.value})
-    });
-
-    let data = await res.json();
-
-    if(data.success){
-        auth.style.display="none";
-        app.style.display="block";
-        load();
+function getData() {
+    return {
+        app_token: app_token.value,
+        event_token: event_token.value,
+        device_id: device_id.value,
+        is_ios: ios.checked,
+        use_s2s: s2s.checked
     }
 }
 
-function logout(){
-    window.location="/logout";
+function addLog(data) {
+    const logBox = document.getElementById("logs");
+    logBox.textContent = JSON.stringify(data, null, 2) + "\n\n" + logBox.textContent;
 }
 
-function getData(){
-    return {
-        app_token:app_token.value,
-        event_token:event_token.value,
-        device_id:device_id.value,
-        ios:document.getElementById("ios").checked,
-        s2s:document.getElementById("s2s").checked
-    };
-}
-
-async function creditNow(){
-    let res = await fetch("/credit-now", {
+async function creditNow() {
+    const res = await fetch("/credit-now", {
         method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify(getData())
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(getData())
     });
 
-    let data = await res.json();
-    alert(JSON.stringify(data));
+    const data = await res.json();
+
+    console.log(data);
+    addLog(data);
 }
 
-async function schedule(){
-    let h = parseInt(hours.value||0);
-    let m = parseInt(minutes.value||0);
-    let s = parseInt(seconds.value||0);
-
-    let total = h*3600 + m*60 + s;
-
+async function schedule() {
     await fetch("/schedule", {
         method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({...getData(), seconds: total})
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+            ...getData(),
+            hours: hours.value || 0,
+            minutes: minutes.value || 0,
+            seconds: seconds.value || 0
+        })
     });
 }
 
-async function cancel(id){
-    await fetch("/cancel", {
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({id})
-    });
+async function cancelJob(id) {
+    await fetch("/cancel/" + id, { method:"POST" });
 }
 
-async function load(){
-    setInterval(async()=>{
-        let jobs = await (await fetch("/jobs",{credentials:"include"})).json();
-        jobsDiv.innerHTML = jobs.map(j=>`
-            <div>
-                ${new Date(j[1]*1000).toLocaleTimeString()} - ${j[2]}
-                <button onclick="cancel('${j[0]}')">Cancel</button>
+function format(sec) {
+    let h = Math.floor(sec/3600);
+    let m = Math.floor((sec%3600)/60);
+    let s = sec%60;
+    return `${h}h ${m}m ${s}s`;
+}
+
+async function loadJobs() {
+    const res = await fetch("/jobs");
+    const jobs = await res.json();
+
+    const container = document.getElementById("jobs");
+    container.innerHTML = "";
+
+    jobs.forEach(j => {
+        container.innerHTML += `
+            <div class="job">
+                Job #${j.id} - ${j.done ? JSON.stringify(j.result) : format(j.remaining)}
+                ${!j.done ? `<button onclick="cancelJob(${j.id})">Cancel</button>` : ""}
             </div>
-        `).join("");
+        `;
 
-        let logs = await (await fetch("/logs",{credentials:"include"})).json();
-        logsDiv.innerHTML = logs.map(l=>`
-            <div>[${l[1]}] ${l[0]}</div>
-        `).join("");
-    },1000);
+        if (j.done && j.result) {
+            addLog(j.result);
+        }
+    });
 }
+
+setInterval(loadJobs, 1000);
 </script>
 
 </body>
