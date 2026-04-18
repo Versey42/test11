@@ -2,11 +2,11 @@ import uuid
 import threading
 import time
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, session, redirect
+from flask import Flask, request, jsonify, render_template, session
 import requests
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"  # required for sessions
+app.secret_key = "supersecretkey"
 
 PASSWORD = "FanoDaddy"
 
@@ -82,24 +82,20 @@ def run_job(jid):
     job["result"] = result
 
 
+# ✅ MAIN ROUTE (LOGIN + TOOL)
 @app.route("/", methods=["GET", "POST"])
-def login():
+def home():
     if request.method == "POST":
         password = request.form.get("password")
 
         if password == PASSWORD:
             session["logged_in"] = True
-            return redirect("/tool")
         else:
             return render_template("login.html", error="Password is incorrect")
 
-    return render_template("login.html")
-
-
-@app.route("/tool")
-def tool():
     if not is_logged_in():
-        return redirect("/")
+        return render_template("login.html")
+
     return render_template("index.html")
 
 
