@@ -2,21 +2,27 @@ import uuid
 import threading
 import time
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, session
+from flask import Flask, request, jsonify, render_template, redirect, session
 import requests
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = "supersecretkey123"  # required for sessions
 
-PASSWORD = "FanoDaddy"
+PASSWORD = "Fano"
 
 jobs = {}
 job_id_counter = 0
 lock = threading.Lock()
 
 
-def is_logged_in():
-    return session.get("logged_in")
+# 🔐 LOGIN REQUIRED DECORATOR
+def login_required(func):
+    def wrapper(*args, **kwargs):
+        if not session.get("logged_in"):
+            return redirect("/login")
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
 
 
 def send_single(app_token, event_token, device_id, is_ios, use_s2s):
@@ -67,8 +73,13 @@ def run_job(jid):
 
         time.sleep(1)
 
-    if job["cancelled"]:
+    if job["cancelled"] or job["executed"]:
         return
+
+    with lock:
+        if job["executed"]:
+            return
+        job["executed"] = True
 
     result = send_single(
         job["app_token"],
@@ -82,28 +93,33 @@ def run_job(jid):
     job["result"] = result
 
 
-# ✅ MAIN ROUTE (LOGIN + TOOL)
-@app.route("/", methods=["GET", "POST"])
-def home():
+# 🔐 LOGIN ROUTES
+@app.route("/login", methods=["GET", "POST"])
+def login():
     if request.method == "POST":
-        password = request.form.get("password")
-
-        if password == PASSWORD:
+        if request.form.get("password") == PASSWORD:
             session["logged_in"] = True
-        else:
-            return render_template("login.html", error="Password is incorrect")
+            return redirect("/")
+        return render_template("login.html", error="Wrong password")
+    return render_template("login.html")
 
-    if not is_logged_in():
-        return render_template("login.html")
 
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+# 🔒 PROTECTED HOME
+@app.route("/")
+@login_required
+def home():
     return render_template("index.html")
 
 
 @app.route("/credit-now", methods=["POST"])
+@login_required
 def credit_now():
-    if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
-
     data = request.get_json(force=True)
 
     result = send_single(
@@ -118,10 +134,8 @@ def credit_now():
 
 
 @app.route("/schedule", methods=["POST"])
+@login_required
 def schedule():
-    if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
-
     global job_id_counter
 
     data = request.get_json(force=True)
@@ -148,6 +162,7 @@ def schedule():
             "use_s2s": data["use_s2s"],
             "cancelled": False,
             "done": False,
+            "executed": False,
             "result": None
         }
 
@@ -157,10 +172,8 @@ def schedule():
 
 
 @app.route("/jobs")
+@login_required
 def get_jobs():
-    if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
-
     output = []
 
     for jid, j in list(jobs.items()):
@@ -183,10 +196,8 @@ def get_jobs():
 
 
 @app.route("/cancel/<int:jid>", methods=["POST"])
+@login_required
 def cancel(jid):
-    if not is_logged_in():
-        return jsonify({"error": "unauthorized"}), 403
-
     if jid in jobs:
         jobs[jid]["cancelled"] = True
         return jsonify({"ok": True})
