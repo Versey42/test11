@@ -66,6 +66,8 @@ button { cursor:pointer; }
 <div id="logs" class="log"></div>
 
 <script>
+const loggedJobs = new Set(); // 🔥 TRACK LOGGED JOBS
+
 function getData() {
     return {
         app_token: app_token.value,
@@ -133,8 +135,10 @@ async function loadJobs() {
             </div>
         `;
 
-        if (j.done && j.result) {
+        // 🔥 ONLY LOG ONCE PER JOB
+        if (j.done && j.result && !loggedJobs.has(j.id)) {
             addLog(j.result);
+            loggedJobs.add(j.id);
         }
     });
 }
