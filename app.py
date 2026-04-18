@@ -1,146 +1,288 @@
-<!DOCTYPE html>
-<html>
-<head>
-<title>S2S Manual</title>
-<style>
-body {
-    background:#0d0d1a;
-    color:#c0bedd;
-    font-family:Courier;
-    padding:20px;
-}
+import uuid
+import threading
+import time
+import json
+import os
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, render_template, session, redirect
+from werkzeug.security import generate_password_hash, check_password_hash
+import requests
 
-input,button {
-    width:100%;
-    padding:8px;
-    margin:5px 0;
-    background:#1a1a2e;
-    border:none;
-    color:#fff;
-}
+app = Flask(__name__)
+app.secret_key = "super_secret_key_change_this"
 
-button { cursor:pointer; }
+USERS_FILE = "users.json"
+JOBS_FILE = "jobs.json"
 
-.job {
-    background:#111;
-    padding:8px;
-    margin:5px 0;
-}
+users = {}
+jobs = {}
+job_id_counter = 0
+lock = threading.Lock()
 
-.log {
-    background:#000;
-    padding:10px;
-    margin-top:10px;
-    white-space:pre-wrap;
-    font-size:12px;
-    max-height:200px;
-    overflow:auto;
-}
-</style>
-</head>
-<body>
 
-<h2>S2S Manual</h2>
+# ---------- LOAD / SAVE ----------
 
-<input id="app_token" placeholder="App Token">
-<input id="event_token" placeholder="Event Token">
-<input id="device_id" placeholder="Device ID">
+def load_data():
+    global users, jobs, job_id_counter
 
-<label><input type="checkbox" id="ios" checked> iOS</label>
-<label><input type="checkbox" id="s2s"> s2s</label>
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            users.update(json.load(f))
 
-<button onclick="creditNow()">🔥 Credit Now</button>
+    if os.path.exists(JOBS_FILE):
+        with open(JOBS_FILE, "r") as f:
+            raw = json.load(f)
+            for jid, j in raw.items():
+                j["target"] = datetime.fromisoformat(j["target"])
+                jobs[int(jid)] = j
 
-<h3>Schedule</h3>
+            if jobs:
+                job_id_counter = max(jobs.keys())
 
-<input id="hours" placeholder="Hours">
-<input id="minutes" placeholder="Minutes">
-<input id="seconds" placeholder="Seconds">
 
-<button onclick="schedule()">Schedule</button>
+def save_users():
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f)
 
-<h3>Jobs</h3>
-<div id="jobs"></div>
 
-<h3>Logs</h3>
-<div id="logs" class="log"></div>
+def save_jobs():
+    with open(JOBS_FILE, "w") as f:
+        serializable = {}
+        for jid, j in jobs.items():
+            temp = j.copy()
+            temp["target"] = temp["target"].isoformat()
+            serializable[jid] = temp
+        json.dump(serializable, f)
 
-<script>
-function getData() {
-    return {
-        app_token: app_token.value,
-        event_token: event_token.value,
-        device_id: device_id.value,
-        is_ios: ios.checked,
-        use_s2s: s2s.checked
-    }
-}
 
-function addLog(data) {
-    const logBox = document.getElementById("logs");
-    logBox.textContent = JSON.stringify(data, null, 2) + "\n\n" + logBox.textContent;
-}
+# ---------- AUTH ----------
 
-async function creditNow() {
-    const res = await fetch("/credit-now", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify(getData())
-    });
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        data = request.form
+        username = data["username"]
+        password = data["password"]
 
-    const data = await res.json();
+        if username in users and check_password_hash(users[username], password):
+            session["user"] = username
+            return redirect("/")
 
-    console.log(data);
-    addLog(data);
-}
+        return "Invalid login"
 
-async function schedule() {
-    await fetch("/schedule", {
-        method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({
-            ...getData(),
-            hours: hours.value || 0,
-            minutes: minutes.value || 0,
-            seconds: seconds.value || 0
-        })
-    });
-}
+    return render_template("login.html")
 
-async function cancelJob(id) {
-    await fetch("/cancel/" + id, { method:"POST" });
-}
 
-function format(sec) {
-    let h = Math.floor(sec/3600);
-    let m = Math.floor((sec%3600)/60);
-    let s = sec%60;
-    return `${h}h ${m}m ${s}s`;
-}
+@app.route("/register", methods=["GET", "POST"])
+def register():
+    if request.method == "POST":
+        data = request.form
+        username = data["username"]
+        password = data["password"]
 
-async function loadJobs() {
-    const res = await fetch("/jobs");
-    const jobs = await res.json();
+        if username in users:
+            return "User exists"
 
-    const container = document.getElementById("jobs");
-    container.innerHTML = "";
+        users[username] = generate_password_hash(password)
+        save_users()
+        return redirect("/login")
 
-    jobs.forEach(j => {
-        container.innerHTML += `
-            <div class="job">
-                Job #${j.id} - ${j.done ? JSON.stringify(j.result) : format(j.remaining)}
-                ${!j.done ? `<button onclick="cancelJob(${j.id})">Cancel</button>` : ""}
-            </div>
-        `;
+    return render_template("register.html")
 
-        if (j.done && j.result) {
-            addLog(j.result);
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+def require_login():
+    return "user" in session
+
+
+# ---------- CORE ----------
+
+def send_single(app_token, event_token, device_id, is_ios, use_s2s):
+    try:
+        url = "https://app.adjust.com/event"
+
+        headers = {
+            "accept-encoding": "gzip",
+            "client-sdk": "android4.36.0",
+            "content-type": "application/x-www-form-urlencoded"
         }
-    });
-}
 
-setInterval(loadJobs, 1000);
-</script>
+        data = {
+            "app_token": app_token,
+            "event_token": event_token,
+            "environment": "production"
+        }
 
-</body>
-</html>
+        if is_ios:
+            data["idfa"] = device_id
+        else:
+            data["gps_adid"] = device_id
+            data["android_uuid"] = str(uuid.uuid4())
+
+        if use_s2s:
+            data["s2s"] = "1"
+
+        r = requests.post(url, data=data, headers=headers, timeout=10)
+
+        try:
+            return r.json()
+        except:
+            return {"raw": r.text, "status": r.status_code}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def run_job(jid):
+    job = jobs[jid]
+
+    while True:
+        if job["cancelled"]:
+            return
+
+        if datetime.now() >= job["target"]:
+            break
+
+        time.sleep(1)
+
+    if job["cancelled"]:
+        return
+
+    result = send_single(
+        job["app_token"],
+        job["event_token"],
+        job["device_id"],
+        job["is_ios"],
+        job["use_s2s"]
+    )
+
+    job["done"] = True
+    job["result"] = result
+    save_jobs()
+
+
+# ---------- ROUTES ----------
+
+@app.route("/")
+def home():
+    if not require_login():
+        return redirect("/login")
+    return render_template("index.html", user=session["user"])
+
+
+@app.route("/credit-now", methods=["POST"])
+def credit_now():
+    if not require_login():
+        return jsonify({"error": "unauthorized"}), 401
+
+    data = request.get_json(force=True)
+
+    result = send_single(
+        data["app_token"],
+        data["event_token"],
+        data["device_id"],
+        data["is_ios"],
+        data["use_s2s"]
+    )
+
+    return jsonify(result)
+
+
+@app.route("/schedule", methods=["POST"])
+def schedule():
+    if not require_login():
+        return jsonify({"error": "unauthorized"}), 401
+
+    global job_id_counter
+    data = request.get_json(force=True)
+
+    seconds = (
+        int(data.get("hours", 0)) * 3600 +
+        int(data.get("minutes", 0)) * 60 +
+        int(data.get("seconds", 0))
+    )
+
+    target = datetime.now() + timedelta(seconds=seconds)
+
+    with lock:
+        job_id_counter += 1
+        jid = job_id_counter
+
+        jobs[jid] = {
+            "id": jid,
+            "user": session["user"],
+            "target": target,
+            "app_token": data["app_token"],
+            "event_token": data["event_token"],
+            "device_id": data["device_id"],
+            "is_ios": data["is_ios"],
+            "use_s2s": data["use_s2s"],
+            "cancelled": False,
+            "done": False,
+            "result": None
+        }
+
+        save_jobs()
+
+    threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+    return jsonify({"ok": True})
+
+
+@app.route("/jobs")
+def get_jobs():
+    if not require_login():
+        return jsonify([])
+
+    output = []
+
+    for jid, j in list(jobs.items()):
+        if j["user"] != session["user"]:
+            continue
+
+        if j["cancelled"]:
+            del jobs[jid]
+            save_jobs()
+            continue
+
+        remaining = int((j["target"] - datetime.now()).total_seconds())
+        if remaining < 0:
+            remaining = 0
+
+        output.append({
+            "id": j["id"],
+            "remaining": remaining,
+            "done": j["done"],
+            "result": j["result"]
+        })
+
+    return jsonify(output)
+
+
+@app.route("/cancel/<int:jid>", methods=["POST"])
+def cancel(jid):
+    if jid in jobs and jobs[jid]["user"] == session.get("user"):
+        jobs[jid]["cancelled"] = True
+        save_jobs()
+        return jsonify({"ok": True})
+    return jsonify({"error": "not found"}), 404
+
+
+# ---------- RESTART JOBS ----------
+
+def restart_jobs():
+    for jid, j in jobs.items():
+        if not j["done"] and not j["cancelled"]:
+            threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+
+load_data()
+restart_jobs()
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=10000)
