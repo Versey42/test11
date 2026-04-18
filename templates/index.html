@@ -1,7 +1,8 @@
 <!DOCTYPE html>
 <html>
 <head>
-<title>S2S Manual</title>
+<title>Scheduler</title>
+
 <style>
 body {
     background:#0d0d1a;
@@ -10,140 +11,165 @@ body {
     padding:20px;
 }
 
-input,button {
-    width:100%;
-    padding:8px;
-    margin:5px 0;
+input, button {
     background:#1a1a2e;
     border:none;
     color:#fff;
+    padding:8px;
+    margin:5px;
 }
 
 button { cursor:pointer; }
 
-.job {
+.box {
     background:#111;
-    padding:8px;
-    margin:5px 0;
+    padding:15px;
+    margin-bottom:20px;
 }
 
-.log {
+.logs {
     background:#000;
     padding:10px;
-    margin-top:10px;
-    white-space:pre-wrap;
-    font-size:12px;
-    max-height:200px;
+    height:250px;
     overflow:auto;
+    font-size:12px;
+}
+
+.job {
+    margin:5px 0;
 }
 </style>
 </head>
+
 <body>
 
-<h2>S2S Manual</h2>
+<h2>Event Scheduler</h2>
+
+<button onclick="logout()">🚪 Logout</button>
+
+<div class="box">
 
 <input id="app_token" placeholder="App Token">
 <input id="event_token" placeholder="Event Token">
 <input id="device_id" placeholder="Device ID">
 
-<label><input type="checkbox" id="ios" checked> iOS</label>
-<label><input type="checkbox" id="s2s"> s2s</label>
+<br>
 
-<button onclick="creditNow()">🔥 Credit Now</button>
+<label><input type="checkbox" id="ios"> iOS</label>
+<label><input type="checkbox" id="s2s"> S2S</label>
 
-<h3>Schedule</h3>
+<br><br>
 
-<input id="hours" placeholder="Hours">
-<input id="minutes" placeholder="Minutes">
-<input id="seconds" placeholder="Seconds">
+<h4>Schedule</h4>
+
+<input id="hours" placeholder="Hours" value="0">
+<input id="minutes" placeholder="Minutes" value="0">
+<input id="seconds" placeholder="Seconds" value="10">
+
+<br>
 
 <button onclick="schedule()">Schedule</button>
+<button onclick="creditNow()">⚡ Credit Now</button>
 
+</div>
+
+<div class="box">
 <h3>Jobs</h3>
 <div id="jobs"></div>
+</div>
 
+<div class="box">
 <h3>Logs</h3>
-<div id="logs" class="log"></div>
+<div id="logs" class="logs"></div>
+</div>
 
 <script>
-const loggedJobs = new Set(); // 🔥 TRACK LOGGED JOBS
 
-function getData() {
-    return {
-        app_token: app_token.value,
-        event_token: event_token.value,
-        device_id: device_id.value,
-        is_ios: ios.checked,
-        use_s2s: s2s.checked
-    }
+function logout() {
+    window.location.href = "/logout";
 }
 
-function addLog(data) {
-    const logBox = document.getElementById("logs");
-    logBox.textContent = JSON.stringify(data, null, 2) + "\n\n" + logBox.textContent;
+function log(msg) {
+    const logs = document.getElementById("logs");
+
+    logs.innerHTML += `<div>${JSON.stringify(msg)}</div>`;
+    logs.scrollTop = logs.scrollHeight;
 }
 
 async function creditNow() {
     const res = await fetch("/credit-now", {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
+        headers:{"Content-Type":"application/json"},
         body: JSON.stringify(getData())
     });
 
     const data = await res.json();
-
-    console.log(data);
-    addLog(data);
+    log(data);
 }
 
 async function schedule() {
     await fetch("/schedule", {
         method:"POST",
-        headers:{ "Content-Type":"application/json" },
-        body: JSON.stringify({
-            ...getData(),
-            hours: hours.value || 0,
-            minutes: minutes.value || 0,
-            seconds: seconds.value || 0
-        })
+        headers:{"Content-Type":"application/json"},
+        body: JSON.stringify(getData())
     });
 }
 
-async function cancelJob(id) {
-    await fetch("/cancel/" + id, { method:"POST" });
+function getData() {
+    return {
+        app_token: document.getElementById("app_token").value,
+        event_token: document.getElementById("event_token").value,
+        device_id: document.getElementById("device_id").value,
+        is_ios: document.getElementById("ios").checked,
+        use_s2s: document.getElementById("s2s").checked,
+        hours: document.getElementById("hours").value,
+        minutes: document.getElementById("minutes").value,
+        seconds: document.getElementById("seconds").value
+    };
 }
 
-function format(sec) {
-    let h = Math.floor(sec/3600);
-    let m = Math.floor((sec%3600)/60);
-    let s = sec%60;
+async function cancelJob(id) {
+    await fetch("/cancel/" + id, {method:"POST"});
+}
+
+function formatTime(sec) {
+    let h = Math.floor(sec / 3600);
+    let m = Math.floor((sec % 3600) / 60);
+    let s = sec % 60;
     return `${h}h ${m}m ${s}s`;
 }
 
 async function loadJobs() {
     const res = await fetch("/jobs");
-    const jobs = await res.json();
+    const data = await res.json();
 
     const container = document.getElementById("jobs");
     container.innerHTML = "";
 
-    jobs.forEach(j => {
-        container.innerHTML += `
-            <div class="job">
-                Job #${j.id} - ${j.done ? JSON.stringify(j.result) : format(j.remaining)}
-                ${!j.done ? `<button onclick="cancelJob(${j.id})">Cancel</button>` : ""}
-            </div>
+    data.forEach(j => {
+        const div = document.createElement("div");
+        div.className = "job";
+
+        let text = `Job #${j.id} - `;
+
+        if (!j.done) {
+            text += formatTime(j.remaining);
+        } else {
+            text += JSON.stringify(j.result);
+            log(j.result);
+        }
+
+        div.innerHTML = `
+            ${text}
+            <button onclick="cancelJob(${j.id})">❌ Cancel</button>
         `;
 
-        // 🔥 ONLY LOG ONCE PER JOB
-        if (j.done && j.result && !loggedJobs.has(j.id)) {
-            addLog(j.result);
-            loggedJobs.add(j.id);
-        }
+        container.appendChild(div);
     });
 }
 
 setInterval(loadJobs, 1000);
+
 </script>
 
 </body>
