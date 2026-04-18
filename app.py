@@ -212,26 +212,33 @@ import time
 
 def job_runner():
     while True:
-        now = datetime.utcnow().timestamp()
+        try:
+            now = datetime.utcnow().timestamp()
 
-        for job_id in list(jobs.keys()):
-            job = jobs[job_id]
+            for job_id in list(jobs.keys()):
+                job = jobs[job_id]
 
-            if now >= job["run_at"]:
-                send_single(
-                    job["data"].get("app_token"),
-                    job["data"].get("event_token"),
-                    job["data"].get("device_id"),
-                    job["data"].get("is_ios"),
-                    job["data"].get("use_s2s")
-                )
+                if now >= job["run_at"]:
+                    send_single(
+                        job["data"].get("app_token"),
+                        job["data"].get("event_token"),
+                        job["data"].get("device_id"),
+                        job["data"].get("is_ios"),
+                        job["data"].get("use_s2s")
+                    )
 
-                del jobs[job_id]
+                    del jobs[job_id]
 
-        time.sleep(1)
+            time.sleep(1)
+
+        except Exception as e:
+            print("BACKGROUND ERROR:", e)
+            time.sleep(2)
 
 
-threading.Thread(target=job_runner, daemon=True).start()
+# ✅ ONLY start thread in production-safe way
+if not app.debug:
+    threading.Thread(target=job_runner, daemon=True).start()
 
 
 # =========================
