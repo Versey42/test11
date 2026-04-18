@@ -2,11 +2,13 @@ import uuid
 import threading
 import time
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template, session, redirect
+from flask import Flask, request, jsonify, render_template, session, redirect, url_for
 import requests
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey123"  # required for session
+
+# ✅ REQUIRED for sessions (fixes 500 error)
+app.config["SECRET_KEY"] = "change-this-secret-key"
 
 PASSWORD = "FanoDaddy"
 
@@ -82,22 +84,28 @@ def run_job(jid):
     job["result"] = result
 
 
+# ✅ LOGIN PAGE
 @app.route("/", methods=["GET", "POST"])
 def login():
-    if request.method == "POST":
-        if request.form.get("password") == PASSWORD:
-            session["auth"] = True
-            return redirect("/dashboard")
-        else:
-            return render_template("login.html", error="Wrong password")
+    try:
+        if request.method == "POST":
+            if request.form.get("password") == PASSWORD:
+                session["auth"] = True
+                return redirect(url_for("dashboard"))
+            else:
+                return render_template("login.html", error="Wrong password")
 
-    return render_template("login.html")
+        return render_template("login.html")
+
+    except Exception as e:
+        return f"Login error: {str(e)}"
 
 
+# ✅ DASHBOARD
 @app.route("/dashboard")
 def dashboard():
     if not is_logged_in():
-        return redirect("/")
+        return redirect(url_for("login"))
     return render_template("index.html")
 
 
