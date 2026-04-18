@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+<title>Login</title>
+
+<style>
+body {
+    background:#0d0d1a;
+    color:#c0bedd;
+    font-family:Courier;
+    display:flex;
+    justify-content:center;
+    align-items:center;
+    height:100vh;
+    margin:0;
+}
+
+.box {
+    background:#111;
+    padding:30px;
+    width:320px;
+    border-radius:6px;
+    box-shadow:0 0 10px #000;
+}
+
+h2 {
+    margin:0 0 15px 0;
+    text-align:center;
+}
+
+input {
+    width:100%;
+    padding:10px;
+    margin-top:10px;
+    background:#1a1a2e;
+    border:none;
+    color:#fff;
+}
+
+button {
+    width:100%;
+    padding:10px;
+    margin-top:15px;
+    background:#26264a;
+    border:none;
+    color:#fff;
+    cursor:pointer;
+}
+
+button:hover {
+    background:#33336b;
+}
+
+.error {
+    color:#ff4d4d;
+    margin-top:10px;
+    text-align:center;
+    font-size:14px;
+}
+</style>
+
+</head>
+<body>
+
+<div class="box">
+    <h2>🔒 Enter Password</h2>
+
+    <form method="POST">
+        <input type="password" name="password" placeholder="Password" required>
+        <button type="submit">Enter</button>
+    </form>
+
+    {% if error %}
+        <div class="error">{{ error }}</div>
+    {% endif %}
+</div>
+
+</body>
+</html>
