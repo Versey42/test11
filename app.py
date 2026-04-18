@@ -21,12 +21,14 @@ def is_logged_in():
 @app.route("/", methods=["GET", "POST"])
 def login():
     try:
-        # ✅ prevent double login loop
-        if is_logged_in():
+        # already logged in → go dashboard
+        if session.get("auth"):
             return redirect(url_for("dashboard"))
 
         if request.method == "POST":
-            if request.form.get("password") == PASSWORD:
+            password = request.form.get("password")
+
+            if password == PASSWORD:
                 session["auth"] = True
                 return redirect(url_for("dashboard"))
             else:
@@ -36,6 +38,7 @@ def login():
 
     except Exception as e:
         return f"Login error: {str(e)}"
+
 
 
 # =========================
