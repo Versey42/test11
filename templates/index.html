@@ -1,298 +1,166 @@
 <!DOCTYPE html>
 <html>
 <head>
-    <title>Fano's Tools</title>
+<title>Fano's Tools</title>
 
-    <style>
-        body {
-            margin:0;
-            font-family: Arial;
-            background: #0b1a2b;
-            color: white;
-            text-align:center;
-        }
+<style>
+body {
+    background:#0d0d1a;
+    color:#c0bedd;
+    font-family:Courier;
+    padding:20px;
+}
 
-        .box {
-            background:#112b45;
-            padding:20px;
-            border-radius:10px;
-            width:300px;
-            margin:20px auto;
-        }
+input,button {
+    width:100%;
+    padding:8px;
+    margin:5px 0;
+    background:#1a1a2e;
+    border:none;
+    color:#fff;
+}
 
-        input {
-            width:90%;
-            padding:10px;
-            margin:5px;
-            border:none;
-            border-radius:5px;
-        }
+button { cursor:pointer; }
 
-        button {
-            padding:10px 15px;
-            margin:5px;
-            border:none;
-            border-radius:5px;
-            background:#1e90ff;
-            color:white;
-            cursor:pointer;
-        }
+.job {
+    background:#111;
+    padding:8px;
+    margin:5px 0;
+}
 
-        button:hover {
-            background:#3aa0ff;
-        }
+.log {
+    background:#000;
+    padding:10px;
+    margin-top:10px;
+    white-space:pre-wrap;
+    font-size:12px;
+    max-height:200px;
+    overflow:auto;
+}
 
-        #jobs div {
-            background:#0e2238;
-            padding:10px;
-            margin:5px;
-            border-radius:5px;
-        }
-
-        #logs {
-            max-height:200px;
-            overflow:auto;
-            text-align:left;
-        }
-    </style>
+.topbar {
+    margin-bottom:15px;
+}
+</style>
 </head>
 
 <body>
 
-<div id="auth" class="box">
+<div class="topbar">
     <h2>Fano's Tools</h2>
-
-    <input id="username" placeholder="Username">
-    <input id="password" type="password" placeholder="Password">
-
-    <button onclick="login()">Login</button>
-    <button onclick="register()">Register</button>
-
-    <p id="authMsg"></p>
+    <p>Logged in as: {{ user }} | <a href="/logout">Logout</a></p>
 </div>
 
-<div id="app" style="display:none;">
+<input id="app_token" placeholder="App Token">
+<input id="event_token" placeholder="Event Token">
+<input id="device_id" placeholder="Device ID">
 
-    <div class="box">
-        <h2>Fano's Tools</h2>
-        <button onclick="logout()">Logout</button>
-    </div>
+<label><input type="checkbox" id="ios" checked> iOS</label>
+<label><input type="checkbox" id="s2s"> s2s</label>
 
-    <div class="box">
-        <h3>Instant Credit</h3>
+<button onclick="creditNow()">🔥 Credit Now</button>
 
-        <input id="app_token" placeholder="App Token">
-        <input id="event_token" placeholder="Event Token">
-        <input id="device_id" placeholder="Device ID">
+<h3>Schedule</h3>
 
-        <br>
+<input id="hours" placeholder="Hours">
+<input id="minutes" placeholder="Minutes">
+<input id="seconds" placeholder="Seconds">
 
-        <label><input type="checkbox" id="ios"> iOS</label>
-        <label><input type="checkbox" id="s2s"> S2S</label>
+<button onclick="schedule()">Schedule</button>
 
-        <br><br>
+<h3>Jobs</h3>
+<div id="jobs"></div>
 
-        <button onclick="creditNow()">Credit Now</button>
-    </div>
-
-    <div class="box">
-        <h3>Scheduler</h3>
-
-        <input id="h" type="number" placeholder="Hours">
-        <input id="m" type="number" placeholder="Minutes">
-        <input id="s" type="number" placeholder="Seconds">
-
-        <br><br>
-
-        <button onclick="schedule()">Start Job</button>
-    </div>
-
-    <div class="box">
-        <h3>Jobs</h3>
-        <div id="jobs"></div>
-    </div>
-
-    <div class="box">
-        <h3>Logs</h3>
-        <button onclick="clearLogs()">Clear Logs</button>
-        <div id="logs"></div>
-    </div>
-
-</div>
+<h3>Logs</h3>
+<div id="logs" class="log"></div>
 
 <script>
-function showApp(){
-    document.getElementById("auth").style.display="none";
-    document.getElementById("app").style.display="block";
-    loadJobs();
-    loadLogs();
-}
-
-function showAuth(){
-    document.getElementById("auth").style.display="block";
-    document.getElementById("app").style.display="none";
-}
-
-/* 🔥 FIXED LOGIN */
-async function login(){
-    let res = await fetch("/login",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
-        })
-    });
-
-    let d = await res.json();
-
-    if(d.success){
-        showApp();
-    }else{
-        authMsg.innerText="Login failed";
+function getData() {
+    return {
+        app_token: app_token.value,
+        event_token: event_token.value,
+        device_id: device_id.value,
+        is_ios: ios.checked,
+        use_s2s: s2s.checked
     }
 }
 
-async function register(){
-    let res = await fetch("/register",{
+function addLog(data) {
+    const logBox = document.getElementById("logs");
+    logBox.textContent =
+        JSON.stringify(data, null, 2) + "\n\n" + logBox.textContent;
+}
+
+async function creditNow() {
+    const res = await fetch("/credit-now", {
         method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
-        })
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify(getData())
     });
 
-    let d = await res.json();
+    const data = await res.json();
 
-    if(d.success){
-        authMsg.innerText="Registered! Login now.";
-    }else{
-        authMsg.innerText="User exists";
-    }
+    console.log(data);
+    addLog(data);
 }
 
-function logout(){
-    window.location="/logout";
-}
-
-/* -------- CORE -------- */
-
-async function creditNow(){
-    await fetch("/credit-now",{
+async function schedule() {
+    await fetch("/schedule", {
         method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({
-            app_token:app_token.value,
-            event_token:event_token.value,
-            device_id:device_id.value,
-            is_ios:ios.checked,
-            use_s2s:s2s.checked
+        headers:{ "Content-Type":"application/json" },
+        body: JSON.stringify({
+            ...getData(),
+            hours: hours.value || 0,
+            minutes: minutes.value || 0,
+            seconds: seconds.value || 0
         })
     });
-
-    loadLogs();
 }
 
-async function schedule(){
-    let seconds =
-        (parseInt(h.value)||0)*3600 +
-        (parseInt(m.value)||0)*60 +
-        (parseInt(s.value)||0);
-
-    await fetch("/schedule",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({
-            app_token:app_token.value,
-            event_token:event_token.value,
-            device_id:device_id.value,
-            is_ios:ios.checked,
-            use_s2s:s2s.checked,
-            seconds:seconds
-        })
-    });
-
-    loadJobs();
+async function cancelJob(id) {
+    await fetch("/cancel/" + id, { method:"POST" });
 }
 
-async function loadJobs(){
-    let res = await fetch("/jobs",{credentials:"include"});
-    if(res.status!==200) return showAuth();
+function format(sec) {
+    let h = Math.floor(sec/3600);
+    let m = Math.floor((sec%3600)/60);
+    let s = sec%60;
+    return `${h}h ${m}m ${s}s`;
+}
 
-    let data = await res.json();
+let shownResults = new Set();
 
-    jobs.innerHTML="";
+async function loadJobs() {
+    const res = await fetch("/jobs");
+    const jobs = await res.json();
 
-    data.forEach(j=>{
-        let div=document.createElement("div");
+    const container = document.getElementById("jobs");
+    container.innerHTML = "";
 
-        function update(){
-            let left=Math.floor(j.run_at-Date.now()/1000);
+    jobs.forEach(j => {
+        container.innerHTML += `
+            <div class="job">
+                Job #${j.id} - ${
+                    j.done
+                    ? "Completed"
+                    : format(j.remaining)
+                }
+                ${
+                    !j.done
+                    ? `<button onclick="cancelJob(${j.id})">Cancel</button>`
+                    : ""
+                }
+            </div>
+        `;
 
-            if(left<=0){
-                div.innerHTML="Running...";
-            }else{
-                div.innerHTML=left+"s "+
-                `<button onclick="cancelJob('${j.id}')">Cancel</button>`;
-            }
+        if (j.done && j.result && !shownResults.has(j.id)) {
+            addLog(j.result);
+            shownResults.add(j.id);
         }
-
-        setInterval(update,1000);
-        update();
-
-        jobs.appendChild(div);
     });
 }
 
-async function cancelJob(id){
-    await fetch("/cancel",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({id})
-    });
-
-    loadJobs();
-}
-
-async function loadLogs(){
-    let res=await fetch("/logs",{credentials:"include"});
-    if(res.status!==200) return;
-
-    let data=await res.json();
-
-    logs.innerHTML="";
-    data.forEach(l=>{
-        logs.innerHTML+=`[${l.time}] ${l.msg}<br>`;
-    });
-}
-
-async function clearLogs(){
-    await fetch("/clear-logs",{method:"POST",credentials:"include"});
-    loadLogs();
-}
-
-/* 🔥 AUTO LOGIN CHECK (THIS FIXES YOUR ISSUE) */
-async function checkSession(){
-    let res = await fetch("/jobs",{credentials:"include"});
-    if(res.status===200){
-        showApp();
-    }else{
-        showAuth();
-    }
-}
-
-checkSession();
-
-/* refresh */
-setInterval(loadJobs,5000);
-setInterval(loadLogs,5000);
-
+setInterval(loadJobs, 1000);
 </script>
 
 </body>
