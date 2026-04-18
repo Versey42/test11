@@ -1,278 +1,288 @@
 import uuid
-import sqlite3
 import threading
 import time
-from datetime import datetime
-
-from flask import Flask, request, jsonify, session, redirect, render_template
+import json
+import os
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, render_template, session, redirect
 from werkzeug.security import generate_password_hash, check_password_hash
 import requests
 
 app = Flask(__name__)
-app.secret_key = "secret-key-change-this"
+app.secret_key = "super_secret_key_change_this"
 
-DB = "jobs.db"
+USERS_FILE = "users.json"
+JOBS_FILE = "jobs.json"
 
-
-# ---------------- DB ----------------
-def db():
-    return sqlite3.connect(DB, check_same_thread=False)
-
-
-def init_db():
-    conn = db()
-    c = conn.cursor()
-
-    c.execute("""CREATE TABLE IF NOT EXISTS users(
-        id INTEGER PRIMARY KEY,
-        username TEXT UNIQUE,
-        password TEXT
-    )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS jobs(
-        id TEXT PRIMARY KEY,
-        user TEXT,
-        app_token TEXT,
-        event_token TEXT,
-        device_id TEXT,
-        is_ios INTEGER,
-        use_s2s INTEGER,
-        run_at REAL
-    )""")
-
-    c.execute("""CREATE TABLE IF NOT EXISTS logs(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user TEXT,
-        message TEXT,
-        time TEXT
-    )""")
-
-    conn.commit()
-    conn.close()
+users = {}
+jobs = {}
+job_id_counter = 0
+lock = threading.Lock()
 
 
-init_db()
+# ---------- LOAD / SAVE ----------
+
+def load_data():
+    global users, jobs, job_id_counter
+
+    if os.path.exists(USERS_FILE):
+        with open(USERS_FILE, "r") as f:
+            users.update(json.load(f))
+
+    if os.path.exists(JOBS_FILE):
+        with open(JOBS_FILE, "r") as f:
+            raw = json.load(f)
+            for jid, j in raw.items():
+                j["target"] = datetime.fromisoformat(j["target"])
+                jobs[int(jid)] = j
+
+            if jobs:
+                job_id_counter = max(jobs.keys())
 
 
-# ---------------- CORE EVENT ----------------
-def send_event(app_token, event_token, device_id, is_ios, use_s2s):
-    url = "https://app.adjust.com/event"
-
-    data = {
-        "app_token": app_token,
-        "event_token": event_token,
-        "environment": "production"
-    }
-
-    if is_ios:
-        data["idfa"] = device_id
-    else:
-        data["gps_adid"] = device_id
-        data["android_uuid"] = str(uuid.uuid4())
-
-    if use_s2s:
-        data["s2s"] = "1"
-
-    try:
-        r = requests.post(url, data=data)
-        return r.text
-    except Exception as e:
-        return str(e)
+def save_users():
+    with open(USERS_FILE, "w") as f:
+        json.dump(users, f)
 
 
-def add_log(user, msg):
-    conn = db()
-    c = conn.cursor()
-    c.execute("INSERT INTO logs(user,message,time) VALUES (?,?,?)",
-              (user, msg, datetime.now().strftime("%H:%M:%S")))
-    conn.commit()
-    conn.close()
+def save_jobs():
+    with open(JOBS_FILE, "w") as f:
+        serializable = {}
+        for jid, j in jobs.items():
+            temp = j.copy()
+            temp["target"] = temp["target"].isoformat()
+            serializable[jid] = temp
+        json.dump(serializable, f)
 
 
-# ---------------- BACKGROUND WORKER ----------------
-def worker():
-    while True:
-        conn = db()
-        c = conn.cursor()
+# ---------- AUTH ----------
 
-        now = time.time()
-
-        c.execute("SELECT * FROM jobs WHERE run_at <= ?", (now,))
-        jobs = c.fetchall()
-
-        for j in jobs:
-            job_id, user, app_token, event_token, device_id, is_ios, use_s2s, run_at = j
-
-            result = send_event(app_token, event_token, device_id, is_ios, use_s2s)
-
-            add_log(user, result)
-
-            c.execute("DELETE FROM jobs WHERE id=?", (job_id,))
-            conn.commit()
-
-        conn.close()
-        time.sleep(1)
-
-
-# 🔥 IMPORTANT FIX (prevents multiple workers on Render)
-if not hasattr(app, "worker_started"):
-    threading.Thread(target=worker, daemon=True).start()
-    app.worker_started = True
-
-
-# ---------------- AUTH ----------------
-@app.route("/login", methods=["POST"])
+@app.route("/login", methods=["GET", "POST"])
 def login():
-    data = request.json
-    conn = db()
-    c = conn.cursor()
+    if request.method == "POST":
+        data = request.form
+        username = data["username"]
+        password = data["password"]
 
-    c.execute("SELECT * FROM users WHERE username=?", (data["username"],))
-    user = c.fetchone()
+        if username in users and check_password_hash(users[username], password):
+            session["user"] = username
+            return redirect("/")
 
-    if user and check_password_hash(user[2], data["password"]):
-        session["user"] = data["username"]
-        return jsonify(success=True)
+        return "Invalid login"
 
-    return jsonify(success=False)
+    return render_template("login.html")
 
 
-@app.route("/register", methods=["POST"])
+@app.route("/register", methods=["GET", "POST"])
 def register():
-    data = request.json
-    conn = db()
-    c = conn.cursor()
+    if request.method == "POST":
+        data = request.form
+        username = data["username"]
+        password = data["password"]
 
-    try:
-        c.execute("INSERT INTO users(username,password) VALUES (?,?)",
-                  (data["username"], generate_password_hash(data["password"])))
-        conn.commit()
-    except:
-        return jsonify(success=False)
+        if username in users:
+            return "User exists"
 
-    return jsonify(success=True)
+        users[username] = generate_password_hash(password)
+        save_users()
+        return redirect("/login")
+
+    return render_template("register.html")
 
 
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect("/")
+    return redirect("/login")
 
 
-# ---------------- ROUTES ----------------
+def require_login():
+    return "user" in session
+
+
+# ---------- CORE ----------
+
+def send_single(app_token, event_token, device_id, is_ios, use_s2s):
+    try:
+        url = "https://app.adjust.com/event"
+
+        headers = {
+            "accept-encoding": "gzip",
+            "client-sdk": "android4.36.0",
+            "content-type": "application/x-www-form-urlencoded"
+        }
+
+        data = {
+            "app_token": app_token,
+            "event_token": event_token,
+            "environment": "production"
+        }
+
+        if is_ios:
+            data["idfa"] = device_id
+        else:
+            data["gps_adid"] = device_id
+            data["android_uuid"] = str(uuid.uuid4())
+
+        if use_s2s:
+            data["s2s"] = "1"
+
+        r = requests.post(url, data=data, headers=headers, timeout=10)
+
+        try:
+            return r.json()
+        except:
+            return {"raw": r.text, "status": r.status_code}
+
+    except Exception as e:
+        return {"error": str(e)}
+
+
+def run_job(jid):
+    job = jobs[jid]
+
+    while True:
+        if job["cancelled"]:
+            return
+
+        if datetime.now() >= job["target"]:
+            break
+
+        time.sleep(1)
+
+    if job["cancelled"]:
+        return
+
+    result = send_single(
+        job["app_token"],
+        job["event_token"],
+        job["device_id"],
+        job["is_ios"],
+        job["use_s2s"]
+    )
+
+    job["done"] = True
+    job["result"] = result
+    save_jobs()
+
+
+# ---------- ROUTES ----------
+
 @app.route("/")
 def home():
-    return render_template("index.html")
+    if not require_login():
+        return redirect("/login")
+    return render_template("index.html", user=session["user"])
 
 
 @app.route("/credit-now", methods=["POST"])
 def credit_now():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401
+    if not require_login():
+        return jsonify({"error": "unauthorized"}), 401
 
-    d = request.json
+    data = request.get_json(force=True)
 
-    result = send_event(
-        d["app_token"],
-        d["event_token"],
-        d["device_id"],
-        d["is_ios"],
-        d["use_s2s"]
+    result = send_single(
+        data["app_token"],
+        data["event_token"],
+        data["device_id"],
+        data["is_ios"],
+        data["use_s2s"]
     )
 
-    add_log(user, result)
-
-    return jsonify(result=result)
+    return jsonify(result)
 
 
 @app.route("/schedule", methods=["POST"])
 def schedule():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401
+    if not require_login():
+        return jsonify({"error": "unauthorized"}), 401
 
-    d = request.json
+    global job_id_counter
+    data = request.get_json(force=True)
 
-    seconds = int(d["seconds"])
-    run_at = time.time() + seconds
+    seconds = (
+        int(data.get("hours", 0)) * 3600 +
+        int(data.get("minutes", 0)) * 60 +
+        int(data.get("seconds", 0))
+    )
 
-    job_id = str(uuid.uuid4())
+    target = datetime.now() + timedelta(seconds=seconds)
 
-    conn = db()
-    c = conn.cursor()
+    with lock:
+        job_id_counter += 1
+        jid = job_id_counter
 
-    c.execute("INSERT INTO jobs VALUES (?,?,?,?,?,?,?,?)",
-              (job_id, user, d["app_token"], d["event_token"],
-               d["device_id"], d["is_ios"], d["use_s2s"], run_at))
+        jobs[jid] = {
+            "id": jid,
+            "user": session["user"],
+            "target": target,
+            "app_token": data["app_token"],
+            "event_token": data["event_token"],
+            "device_id": data["device_id"],
+            "is_ios": data["is_ios"],
+            "use_s2s": data["use_s2s"],
+            "cancelled": False,
+            "done": False,
+            "result": None
+        }
 
-    conn.commit()
-    conn.close()
+        save_jobs()
 
-    return jsonify(id=job_id)
+    threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+    return jsonify({"ok": True})
 
 
 @app.route("/jobs")
-def jobs():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401  # 🔥 FIX
+def get_jobs():
+    if not require_login():
+        return jsonify([])
 
-    conn = db()
-    c = conn.cursor()
+    output = []
 
-    c.execute("SELECT id, run_at FROM jobs WHERE user=?", (user,))
-    data = [{"id": r[0], "run_at": r[1]} for r in c.fetchall()]
+    for jid, j in list(jobs.items()):
+        if j["user"] != session["user"]:
+            continue
 
-    return jsonify(data)
+        if j["cancelled"]:
+            del jobs[jid]
+            save_jobs()
+            continue
 
+        remaining = int((j["target"] - datetime.now()).total_seconds())
+        if remaining < 0:
+            remaining = 0
 
-@app.route("/cancel", methods=["POST"])
-def cancel():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401
+        output.append({
+            "id": j["id"],
+            "remaining": remaining,
+            "done": j["done"],
+            "result": j["result"]
+        })
 
-    job_id = request.json["id"]
-
-    conn = db()
-    c = conn.cursor()
-
-    c.execute("DELETE FROM jobs WHERE id=? AND user=?", (job_id, user))
-    conn.commit()
-
-    return jsonify(success=True)
+    return jsonify(output)
 
 
-@app.route("/logs")
-def logs():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401
-
-    conn = db()
-    c = conn.cursor()
-
-    c.execute("SELECT message,time FROM logs WHERE user=? ORDER BY id DESC LIMIT 50", (user,))
-    data = [{"msg": r[0], "time": r[1]} for r in c.fetchall()]
-
-    return jsonify(data)
+@app.route("/cancel/<int:jid>", methods=["POST"])
+def cancel(jid):
+    if jid in jobs and jobs[jid]["user"] == session.get("user"):
+        jobs[jid]["cancelled"] = True
+        save_jobs()
+        return jsonify({"ok": True})
+    return jsonify({"error": "not found"}), 404
 
 
-@app.route("/clear-logs", methods=["POST"])
-def clear_logs():
-    user = session.get("user")
-    if not user:
-        return jsonify(error="not logged in"), 401
+# ---------- RESTART JOBS ----------
 
-    conn = db()
-    c = conn.cursor()
+def restart_jobs():
+    for jid, j in jobs.items():
+        if not j["done"] and not j["cancelled"]:
+            threading.Thread(target=run_job, args=(jid,), daemon=True).start()
 
-    c.execute("DELETE FROM logs WHERE user=?", (user,))
-    conn.commit()
 
-    return jsonify(success=True)
-
+load_data()
+restart_jobs()
 
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=10000)
