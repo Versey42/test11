@@ -1,48 +1,22 @@
 import uuid
 import threading
 import time
-import json
-import os
 from datetime import datetime, timedelta
-from flask import Flask, request, jsonify, render_template
+from flask import Flask, request, jsonify, render_template, session, redirect
 import requests
 
 app = Flask(__name__)
+app.secret_key = "supersecretkey123"  # required for session
 
-DATA_FILE = "jobs.json"
+PASSWORD = "FanoDaddy"
 
 jobs = {}
 job_id_counter = 0
 lock = threading.Lock()
 
 
-# 🔥 LOAD JOBS ON START
-def load_jobs():
-    global jobs, job_id_counter
-
-    if os.path.exists(DATA_FILE):
-        with open(DATA_FILE, "r") as f:
-            raw = json.load(f)
-
-            for jid, j in raw.items():
-                j["target"] = datetime.fromisoformat(j["target"])
-                jobs[int(jid)] = j
-
-            if jobs:
-                job_id_counter = max(jobs.keys())
-
-
-# 🔥 SAVE JOBS
-def save_jobs():
-    with open(DATA_FILE, "w") as f:
-        serializable = {}
-
-        for jid, j in jobs.items():
-            temp = j.copy()
-            temp["target"] = temp["target"].isoformat()
-            serializable[jid] = temp
-
-        json.dump(serializable, f)
+def is_logged_in():
+    return session.get("auth") == True
 
 
 def send_single(app_token, event_token, device_id, is_ios, use_s2s):
@@ -106,16 +80,32 @@ def run_job(jid):
 
     job["done"] = True
     job["result"] = result
-    save_jobs()
 
 
-@app.route("/")
-def home():
+@app.route("/", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form.get("password") == PASSWORD:
+            session["auth"] = True
+            return redirect("/dashboard")
+        else:
+            return render_template("login.html", error="Wrong password")
+
+    return render_template("login.html")
+
+
+@app.route("/dashboard")
+def dashboard():
+    if not is_logged_in():
+        return redirect("/")
     return render_template("index.html")
 
 
 @app.route("/credit-now", methods=["POST"])
 def credit_now():
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 403
+
     data = request.get_json(force=True)
 
     result = send_single(
@@ -131,8 +121,10 @@ def credit_now():
 
 @app.route("/schedule", methods=["POST"])
 def schedule():
-    global job_id_counter
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 403
 
+    global job_id_counter
     data = request.get_json(force=True)
 
     seconds = (
@@ -160,8 +152,6 @@ def schedule():
             "result": None
         }
 
-        save_jobs()
-
     threading.Thread(target=run_job, args=(jid,), daemon=True).start()
 
     return jsonify({"ok": True})
@@ -169,12 +159,14 @@ def schedule():
 
 @app.route("/jobs")
 def get_jobs():
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 403
+
     output = []
 
     for jid, j in list(jobs.items()):
         if j["cancelled"]:
             del jobs[jid]
-            save_jobs()
             continue
 
         remaining = int((j["target"] - datetime.now()).total_seconds())
@@ -193,22 +185,14 @@ def get_jobs():
 
 @app.route("/cancel/<int:jid>", methods=["POST"])
 def cancel(jid):
+    if not is_logged_in():
+        return jsonify({"error": "unauthorized"}), 403
+
     if jid in jobs:
         jobs[jid]["cancelled"] = True
-        save_jobs()
         return jsonify({"ok": True})
+
     return jsonify({"error": "not found"}), 404
-
-
-# 🔥 RESTART SCHEDULERS AFTER REBOOT
-def restart_jobs():
-    for jid, j in jobs.items():
-        if not j["done"] and not j["cancelled"]:
-            threading.Thread(target=run_job, args=(jid,), daemon=True).start()
-
-
-load_jobs()
-restart_jobs()
 
 
 if __name__ == "__main__":
