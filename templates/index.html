@@ -3,21 +3,9 @@
 <head>
     <title>Fano's Tools</title>
     <style>
-        body {
-            background:#0b0b1a;
-            color:#ccc;
-            font-family: monospace;
-        }
-        input, button {
-            width:100%;
-            margin:5px 0;
-            padding:10px;
-            background:#1a1a2e;
-            color:white;
-            border:none;
-        }
+        body { background:#0b0b1a; color:#ccc; font-family: monospace; }
+        input, button { width:100%; margin:5px 0; padding:10px; background:#1a1a2e; color:white; border:none; }
         button { cursor:pointer; }
-        .box { margin-bottom:20px; }
     </style>
 </head>
 <body>
@@ -34,46 +22,38 @@
 <div id="app" style="display:none;">
     <p>Logged in | <a href="#" onclick="logout()">Logout</a></p>
 
-    <div class="box">
-        <input id="app_token" placeholder="App Token">
-        <input id="event_token" placeholder="Event Token">
-        <input id="device_id" placeholder="Device ID">
+    <input id="app_token" placeholder="App Token">
+    <input id="event_token" placeholder="Event Token">
+    <input id="device_id" placeholder="Device ID">
 
-        <label><input type="checkbox" id="ios"> iOS</label>
-        <label><input type="checkbox" id="s2s"> s2s</label>
+    <label><input type="checkbox" id="ios"> iOS</label>
+    <label><input type="checkbox" id="s2s"> s2s</label>
 
-        <button onclick="creditNow()">🔥 Credit Now</button>
-    </div>
+    <button onclick="creditNow()">🔥 Credit Now</button>
 
-    <div class="box">
-        <h3>Schedule</h3>
-        <input id="hours" placeholder="Hours">
-        <input id="minutes" placeholder="Minutes">
-        <input id="seconds" placeholder="Seconds">
-        <button onclick="schedule()">Schedule</button>
-    </div>
+    <h3>Schedule</h3>
+    <input id="hours" placeholder="Hours">
+    <input id="minutes" placeholder="Minutes">
+    <input id="seconds" placeholder="Seconds">
+    <button onclick="schedule()">Schedule</button>
 
-    <div class="box">
-        <h3>Jobs</h3>
-        <div id="jobs"></div>
-    </div>
+    <h3>Jobs</h3>
+    <div id="jobs"></div>
 
-    <div class="box">
-        <h3>Logs</h3>
-        <div id="logs"></div>
-    </div>
+    <h3>Logs</h3>
+    <div id="logs"></div>
 </div>
 
 <script>
+const jobsDiv = document.getElementById("jobs");
+const logsDiv = document.getElementById("logs");
+
 async function register(){
     await fetch("/register", {
         method:"POST",
         headers:{"Content-Type":"application/json"},
         credentials:"include",
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
-        })
+        body:JSON.stringify({username:username.value,password:password.value})
     });
     alert("Registered");
 }
@@ -83,10 +63,7 @@ async function login(){
         method:"POST",
         headers:{"Content-Type":"application/json"},
         credentials:"include",
-        body:JSON.stringify({
-            username:username.value,
-            password:password.value
-        })
+        body:JSON.stringify({username:username.value,password:password.value})
     });
 
     let data = await res.json();
@@ -95,13 +72,21 @@ async function login(){
         auth.style.display="none";
         app.style.display="block";
         load();
-    } else {
-        alert("Login failed");
     }
 }
 
 function logout(){
-    window.location = "/logout";
+    window.location="/logout";
+}
+
+function getData(){
+    return {
+        app_token:app_token.value,
+        event_token:event_token.value,
+        device_id:device_id.value,
+        ios:document.getElementById("ios").checked,
+        s2s:document.getElementById("s2s").checked
+    };
 }
 
 async function creditNow(){
@@ -127,26 +112,22 @@ async function schedule(){
         method:"POST",
         headers:{"Content-Type":"application/json"},
         credentials:"include",
-        body:JSON.stringify({
-            ...getData(),
-            seconds: total
-        })
+        body:JSON.stringify({...getData(), seconds: total})
     });
 }
 
-function getData(){
-    return {
-        app_token:app_token.value,
-        event_token:event_token.value,
-        device_id:device_id.value
-    };
+async function cancel(id){
+    await fetch("/cancel", {
+        method:"POST",
+        headers:{"Content-Type":"application/json"},
+        credentials:"include",
+        body:JSON.stringify({id})
+    });
 }
 
 async function load(){
     setInterval(async()=>{
-        let jobsRes = await fetch("/jobs",{credentials:"include"});
-        let jobs = await jobsRes.json();
-
+        let jobs = await (await fetch("/jobs",{credentials:"include"})).json();
         jobsDiv.innerHTML = jobs.map(j=>`
             <div>
                 ${new Date(j[1]*1000).toLocaleTimeString()} - ${j[2]}
@@ -154,22 +135,11 @@ async function load(){
             </div>
         `).join("");
 
-        let logsRes = await fetch("/logs",{credentials:"include"});
-        let logs = await logsRes.json();
-
+        let logs = await (await fetch("/logs",{credentials:"include"})).json();
         logsDiv.innerHTML = logs.map(l=>`
             <div>[${l[1]}] ${l[0]}</div>
         `).join("");
     },1000);
-}
-
-async function cancel(id){
-    await fetch("/cancel",{
-        method:"POST",
-        headers:{"Content-Type":"application/json"},
-        credentials:"include",
-        body:JSON.stringify({id})
-    });
 }
 </script>
 
