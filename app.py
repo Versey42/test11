@@ -1,280 +1,215 @@
 import uuid
-import time
 import threading
-import sqlite3
+import time
+import json
+import os
+from datetime import datetime, timedelta
+from flask import Flask, request, jsonify, render_template
 import requests
-from datetime import datetime
-from flask import Flask, request, jsonify, render_template, session, redirect
-from werkzeug.security import generate_password_hash, check_password_hash
 
 app = Flask(__name__)
-app.secret_key = "secret-key-change-this"
 
-DB = "data.db"
+DATA_FILE = "jobs.json"
 
-# ---------------- DB ----------------
-def init_db():
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
+jobs = {}
+job_id_counter = 0
+lock = threading.Lock()
 
-    c.execute("""CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        password TEXT
-    )""")
 
-    c.execute("""CREATE TABLE IF NOT EXISTS jobs (
-        id TEXT,
-        user_id INTEGER,
-        app_token TEXT,
-        event_token TEXT,
-        device_id TEXT,
-        is_ios INTEGER,
-        use_s2s INTEGER,
-        run_at REAL,
-        status TEXT
-    )""")
+# 🔥 LOAD JOBS ON START
+def load_jobs():
+    global jobs, job_id_counter
 
-    c.execute("""CREATE TABLE IF NOT EXISTS logs (
-        user_id INTEGER,
-        message TEXT,
-        time TEXT
-    )""")
+    if os.path.exists(DATA_FILE):
+        with open(DATA_FILE, "r") as f:
+            raw = json.load(f)
 
-    conn.commit()
-    conn.close()
+            for jid, j in raw.items():
+                j["target"] = datetime.fromisoformat(j["target"])
+                jobs[int(jid)] = j
 
-init_db()
+            if jobs:
+                job_id_counter = max(jobs.keys())
 
-# ---------------- LOGGING ----------------
-def add_log(user_id, msg):
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-    c.execute("INSERT INTO logs VALUES (?, ?, ?)",
-              (user_id, msg, datetime.now().strftime("%H:%M:%S")))
-    conn.commit()
-    conn.close()
 
-# ---------------- SEND EVENT (FIXED) ----------------
-def send_event(app_token, event_token, device_id, is_ios, use_s2s):
-    url = "https://app.adjust.com/event"
+# 🔥 SAVE JOBS
+def save_jobs():
+    with open(DATA_FILE, "w") as f:
+        serializable = {}
 
-    data = {
-        "app_token": app_token,
-        "event_token": event_token,
-        "environment": "production",
-        "currency": "USD",
-        "revenue": "4.99"
-    }
+        for jid, j in jobs.items():
+            temp = j.copy()
+            temp["target"] = temp["target"].isoformat()
+            serializable[jid] = temp
 
-    # 🔥 THIS WAS THE PROBLEM — missing correct device handling
-    if is_ios:
-        data["idfa"] = device_id
-    else:
-        data["gps_adid"] = device_id
-        data["android_uuid"] = str(uuid.uuid4())
-        data["google_play_app_set_id"] = str(uuid.uuid4())
+        json.dump(serializable, f)
 
-    if use_s2s:
-        data["s2s"] = "1"
 
-    headers = {
-        "Content-Type": "application/x-www-form-urlencoded"
-    }
-
+def send_single(app_token, event_token, device_id, is_ios, use_s2s):
     try:
-        r = requests.post(url, data=data, headers=headers)
-        txt = r.text
+        url = "https://app.adjust.com/event"
 
-        # 🔥 CLEAN LOG OUTPUT (LIKE DESKTOP)
-        if "Invalid app token" in txt:
-            return {"error": "Event request failed (Invalid app token)"}
+        headers = {
+            "accept-encoding": "gzip",
+            "client-sdk": "android4.36.0",
+            "content-type": "application/x-www-form-urlencoded"
+        }
 
-        if "Invalid event token" in txt:
-            return {"error": "Event request failed (Invalid event token)"}
+        data = {
+            "app_token": app_token,
+            "event_token": event_token,
+            "environment": "production"
+        }
 
-        if "Device not found" in txt:
-            return {
-                "app_token": app_token,
-                "adid": device_id,
-                "error": "Event request failed (Device not found)"
-            }
+        if is_ios:
+            data["idfa"] = device_id
+        else:
+            data["gps_adid"] = device_id
+            data["android_uuid"] = str(uuid.uuid4())
 
-        if "tracked" in txt:
-            return {
-                "app_token": app_token,
-                "adid": device_id,
-                "error": "Event request failed (Ignoring event, earlier unique event tracked)"
-            }
+        if use_s2s:
+            data["s2s"] = "1"
 
-        if "unsupported sdk" in txt:
-            return {"error": "Event request failed (unsupported sdk)"}
+        r = requests.post(url, data=data, headers=headers, timeout=10)
 
-        return {"success": txt}
+        try:
+            return r.json()
+        except:
+            return {"raw": r.text, "status": r.status_code}
 
     except Exception as e:
         return {"error": str(e)}
 
-# ---------------- BACKGROUND WORKER ----------------
-def worker():
+
+def run_job(jid):
+    job = jobs[jid]
+
     while True:
-        conn = sqlite3.connect(DB)
-        c = conn.cursor()
+        if job["cancelled"]:
+            return
 
-        now = time.time()
+        if datetime.now() >= job["target"]:
+            break
 
-        c.execute("SELECT * FROM jobs WHERE status='pending' AND run_at <= ?", (now,))
-        jobs = c.fetchall()
+        time.sleep(1)
 
-        for job in jobs:
-            (job_id, user_id, app_token, event_token,
-             device_id, is_ios, use_s2s, run_at, status) = job
+    if job["cancelled"]:
+        return
 
-            res = send_event(app_token, event_token, device_id, is_ios, use_s2s)
-
-            add_log(user_id, str(res))
-
-            c.execute("UPDATE jobs SET status='done' WHERE id=?", (job_id,))
-            conn.commit()
-
-        conn.close()
-        time.sleep(2)
-
-threading.Thread(target=worker, daemon=True).start()
-
-# ---------------- AUTH ----------------
-@app.route("/register", methods=["POST"])
-def register():
-    data = request.json
-    username = data["username"]
-    password = generate_password_hash(data["password"])
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    try:
-        c.execute("INSERT INTO users (username, password) VALUES (?, ?)", (username, password))
-        conn.commit()
-        return jsonify({"success": True})
-    except:
-        return jsonify({"error": "User exists"})
-
-@app.route("/login", methods=["POST"])
-def login():
-    data = request.json
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT id, password FROM users WHERE username=?", (data["username"],))
-    user = c.fetchone()
-
-    if user and check_password_hash(user[1], data["password"]):
-        session["user_id"] = user[0]
-        return jsonify({"success": True})
-
-    return jsonify({"error": "Invalid login"})
-
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/")
-
-# ---------------- JOBS ----------------
-@app.route("/schedule", methods=["POST"])
-def schedule():
-    if "user_id" not in session:
-        return jsonify({"error": "not logged in"})
-
-    data = request.json
-
-    delay = int(data["seconds"])
-    run_at = time.time() + delay
-
-    job_id = str(uuid.uuid4())
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-              (job_id, session["user_id"],
-               data["app_token"], data["event_token"],
-               data["device_id"],
-               int(data.get("ios", False)),
-               int(data.get("s2s", False)),
-               run_at, "pending"))
-
-    conn.commit()
-    conn.close()
-
-    return jsonify({"success": True})
-
-@app.route("/credit-now", methods=["POST"])
-def credit_now():
-    if "user_id" not in session:
-        return jsonify({"error": "not logged in"})
-
-    data = request.json
-
-    res = send_event(
-        data["app_token"],
-        data["event_token"],
-        data["device_id"],
-        data.get("ios", False),
-        data.get("s2s", False)
+    result = send_single(
+        job["app_token"],
+        job["event_token"],
+        job["device_id"],
+        job["is_ios"],
+        job["use_s2s"]
     )
 
-    add_log(session["user_id"], str(res))
+    job["done"] = True
+    job["result"] = result
+    save_jobs()
 
-    return jsonify(res)
 
-@app.route("/jobs")
-def jobs():
-    if "user_id" not in session:
-        return jsonify([])
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT id, run_at, status FROM jobs WHERE user_id=?", (session["user_id"],))
-    rows = c.fetchall()
-
-    conn.close()
-    return jsonify(rows)
-
-@app.route("/cancel", methods=["POST"])
-def cancel():
-    data = request.json
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("DELETE FROM jobs WHERE id=?", (data["id"],))
-    conn.commit()
-    conn.close()
-
-    return jsonify({"success": True})
-
-@app.route("/logs")
-def logs():
-    if "user_id" not in session:
-        return jsonify([])
-
-    conn = sqlite3.connect(DB)
-    c = conn.cursor()
-
-    c.execute("SELECT message, time FROM logs WHERE user_id=? ORDER BY ROWID DESC LIMIT 50",
-              (session["user_id"],))
-    rows = c.fetchall()
-
-    conn.close()
-    return jsonify(rows)
-
-# ---------------- UI ----------------
 @app.route("/")
 def home():
     return render_template("index.html")
 
-# ---------------- RUN ----------------
+
+@app.route("/credit-now", methods=["POST"])
+def credit_now():
+    data = request.get_json(force=True)
+
+    result = send_single(
+        data["app_token"],
+        data["event_token"],
+        data["device_id"],
+        data["is_ios"],
+        data["use_s2s"]
+    )
+
+    return jsonify(result)
+
+
+@app.route("/schedule", methods=["POST"])
+def schedule():
+    global job_id_counter
+
+    data = request.get_json(force=True)
+
+    seconds = (
+        int(data.get("hours", 0)) * 3600 +
+        int(data.get("minutes", 0)) * 60 +
+        int(data.get("seconds", 0))
+    )
+
+    target = datetime.now() + timedelta(seconds=seconds)
+
+    with lock:
+        job_id_counter += 1
+        jid = job_id_counter
+
+        jobs[jid] = {
+            "id": jid,
+            "target": target,
+            "app_token": data["app_token"],
+            "event_token": data["event_token"],
+            "device_id": data["device_id"],
+            "is_ios": data["is_ios"],
+            "use_s2s": data["use_s2s"],
+            "cancelled": False,
+            "done": False,
+            "result": None
+        }
+
+        save_jobs()
+
+    threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+    return jsonify({"ok": True})
+
+
+@app.route("/jobs")
+def get_jobs():
+    output = []
+
+    for jid, j in list(jobs.items()):
+        if j["cancelled"]:
+            del jobs[jid]
+            save_jobs()
+            continue
+
+        remaining = int((j["target"] - datetime.now()).total_seconds())
+        if remaining < 0:
+            remaining = 0
+
+        output.append({
+            "id": j["id"],
+            "remaining": remaining,
+            "done": j["done"],
+            "result": j["result"]
+        })
+
+    return jsonify(output)
+
+
+@app.route("/cancel/<int:jid>", methods=["POST"])
+def cancel(jid):
+    if jid in jobs:
+        jobs[jid]["cancelled"] = True
+        save_jobs()
+        return jsonify({"ok": True})
+    return jsonify({"error": "not found"}), 404
+
+
+# 🔥 RESTART SCHEDULERS AFTER REBOOT
+def restart_jobs():
+    for jid, j in jobs.items():
+        if not j["done"] and not j["cancelled"]:
+            threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+
+load_jobs()
+restart_jobs()
+
+
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=10000)
