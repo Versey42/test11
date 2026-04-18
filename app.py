@@ -1,21 +1,63 @@
 import uuid
 import threading
 import time
+import json
+import os
 from datetime import datetime, timedelta
 from flask import Flask, request, jsonify, render_template, redirect, session
 import requests
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey123"  # required for sessions
+app.secret_key = "supersecretkey123"
 
 PASSWORD = "Fano"
+
+DATA_FILE = "jobs.json"
 
 jobs = {}
 job_id_counter = 0
 lock = threading.Lock()
 
 
-# 🔐 LOGIN REQUIRED DECORATOR
+# ---------------- SAVE / LOAD ----------------
+
+def save_jobs():
+    data = {}
+    for jid, j in jobs.items():
+        data[jid] = {
+            **j,
+            "target": j["target"].isoformat()
+        }
+
+    with open(DATA_FILE, "w") as f:
+        json.dump(data, f)
+
+
+def load_jobs():
+    global jobs, job_id_counter
+
+    if not os.path.exists(DATA_FILE):
+        return
+
+    with open(DATA_FILE, "r") as f:
+        data = json.load(f)
+
+    for jid, j in data.items():
+        jid = int(jid)
+
+        j["target"] = datetime.fromisoformat(j["target"])
+        jobs[jid] = j
+
+        if jid > job_id_counter:
+            job_id_counter = jid
+
+        # restart unfinished jobs
+        if not j["done"] and not j["cancelled"]:
+            threading.Thread(target=run_job, args=(jid,), daemon=True).start()
+
+
+# ---------------- AUTH ----------------
+
 def login_required(func):
     def wrapper(*args, **kwargs):
         if not session.get("logged_in"):
@@ -24,6 +66,24 @@ def login_required(func):
     wrapper.__name__ = func.__name__
     return wrapper
 
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    if request.method == "POST":
+        if request.form.get("password") == PASSWORD:
+            session["logged_in"] = True
+            return redirect("/")
+        return render_template("login.html", error="Wrong password")
+    return render_template("login.html")
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect("/login")
+
+
+# ---------------- CORE ----------------
 
 def send_single(app_token, event_token, device_id, is_ios, use_s2s):
     try:
@@ -66,6 +126,7 @@ def run_job(jid):
 
     while True:
         if job["cancelled"]:
+            save_jobs()
             return
 
         if datetime.now() >= job["target"]:
@@ -92,25 +153,11 @@ def run_job(jid):
     job["done"] = True
     job["result"] = result
 
-
-# 🔐 LOGIN ROUTES
-@app.route("/login", methods=["GET", "POST"])
-def login():
-    if request.method == "POST":
-        if request.form.get("password") == PASSWORD:
-            session["logged_in"] = True
-            return redirect("/")
-        return render_template("login.html", error="Wrong password")
-    return render_template("login.html")
+    save_jobs()
 
 
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/login")
+# ---------------- ROUTES ----------------
 
-
-# 🔒 PROTECTED HOME
 @app.route("/")
 @login_required
 def home():
@@ -166,6 +213,8 @@ def schedule():
             "result": None
         }
 
+    save_jobs()
+
     threading.Thread(target=run_job, args=(jid,), daemon=True).start()
 
     return jsonify({"ok": True})
@@ -179,6 +228,7 @@ def get_jobs():
     for jid, j in list(jobs.items()):
         if j["cancelled"]:
             del jobs[jid]
+            save_jobs()
             continue
 
         remaining = int((j["target"] - datetime.now()).total_seconds())
@@ -200,9 +250,13 @@ def get_jobs():
 def cancel(jid):
     if jid in jobs:
         jobs[jid]["cancelled"] = True
+        save_jobs()
         return jsonify({"ok": True})
     return jsonify({"error": "not found"}), 404
 
+
+# 🔥 LOAD SAVED JOBS ON START
+load_jobs()
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
